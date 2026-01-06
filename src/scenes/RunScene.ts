@@ -206,11 +206,11 @@ export class RunScene extends Phaser.Scene {
     marker.setScrollFactor(0);
     marker.setDepth(500);
     
-    // GK Status marker (Part B - verification)
+    // ENEMY GK Status marker (Part B - verification)
     this.gkStatusMarker = this.add.text(
       this.cameras.main.width - 10,
       28,
-      'GK: LOADING...',
+      'ENEMY GK: ...',
       {
         fontFamily: 'monospace',
         fontSize: '11px',
@@ -225,21 +225,21 @@ export class RunScene extends Phaser.Scene {
   }
   
   /**
-   * Update GK status marker
+   * Update ENEMY GK status marker
    */
   private updateGKStatusMarker(): void {
     if (!this.gkStatusMarker) return;
     
     if (this.enemyGoalkeeper && TUNING.GK_ENABLED) {
       const gkInfo = this.enemyGoalkeeper.getDebugInfo();
-      const state = gkInfo.isLunging ? 'LUNGE' : 'HOLD';
-      this.gkStatusMarker.setText(`GK: ON (${state}) Saves:${gkInfo.saves}`);
+      const state = this.enemyGoalkeeper.getStateString();
+      this.gkStatusMarker.setText(`🧤 ENEMY GK: ON (${state}) Saves:${gkInfo.saves}`);
       this.gkStatusMarker.setColor('#00ff00');
     } else if (!TUNING.GK_ENABLED) {
-      this.gkStatusMarker.setText('GK: DISABLED');
+      this.gkStatusMarker.setText('ENEMY GK: DISABLED');
       this.gkStatusMarker.setColor('#ff6600');
     } else {
-      this.gkStatusMarker.setText('GK: OFF');
+      this.gkStatusMarker.setText('ENEMY GK: OFF');
       this.gkStatusMarker.setColor('#ff0000');
     }
   }
@@ -753,6 +753,43 @@ export class RunScene extends Phaser.Scene {
     
     // Get GK info if available
     const gkInfo = this.enemyGoalkeeper?.getDebugInfo() || { saves: 0, lunges: 0, isLunging: false };
+    const gkState = this.enemyGoalkeeper?.getStateString() || 'N/A';
+    
+    // Draw GK_BOX if GK exists
+    if (this.enemyGoalkeeper) {
+      const gkBox = this.enemyGoalkeeper.getGKBox();
+      
+      // Draw GK_BOX rectangle (cyan)
+      this.aiDebugGraphics!.lineStyle(2, 0x00ffff, 0.6);
+      this.aiDebugGraphics!.strokeRect(
+        gkBox.minX, 
+        gkBox.minY, 
+        gkBox.maxX - gkBox.minX, 
+        gkBox.maxY - gkBox.minY
+      );
+      
+      // Fill GK_BOX with semi-transparent
+      this.aiDebugGraphics!.fillStyle(0x00ffff, 0.1);
+      this.aiDebugGraphics!.fillRect(
+        gkBox.minX, 
+        gkBox.minY, 
+        gkBox.maxX - gkBox.minX, 
+        gkBox.maxY - gkBox.minY
+      );
+      
+      // Draw GK position with save radius
+      this.aiDebugGraphics!.lineStyle(2, 0xff9900, 0.8);
+      this.aiDebugGraphics!.strokeCircle(this.enemyGoalkeeper.x, this.enemyGoalkeeper.y, 32);
+      
+      // Label "GK_BOX"
+      const gkLabel = this.add.text(gkBox.minX + 5, gkBox.minY - 15, 'GK_BOX', {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: '#00ffff'
+      });
+      gkLabel.setDepth(300);
+      this.aiDebugLabels.push(gkLabel);
+    }
     
     const lines = [
       '=== AI-DEFENSE v3 (tackle-enforced) ===',
@@ -772,10 +809,11 @@ export class RunScene extends Phaser.Scene {
       primaryPresser ? `Range: ${TUNING.AI_TACKLE_RANGE}px` : '',
       primaryPresser ? `CD: ${TUNING.AI_TACKLE_COOLDOWN_MS}ms` : '',
       '',
-      '--- GOALKEEPER ---',
+      '--- ENEMY GOALKEEPER ---',
+      `State: ${gkState}`,
       `Saves: ${gkInfo.saves}`,
       `Lunges: ${gkInfo.lunges}`,
-      `Lunging: ${gkInfo.isLunging ? 'YES' : 'no'}`,
+      `Position: (${Math.round(this.enemyGoalkeeper?.x || 0)}, ${Math.round(this.enemyGoalkeeper?.y || 0)})`,
       '',
       '--- ENEMIES ---',
       ...this.enemies.slice(0, 3).map((e, i) => {
