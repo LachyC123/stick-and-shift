@@ -1008,6 +1008,239 @@ export class UISystem {
     return this.activeCurseName;
   }
   
+  // ========================================
+  // PLAY ACTIVE DISPLAY
+  // ========================================
+  
+  private playActiveContainer?: Phaser.GameObjects.Container;
+  private playActiveText?: Phaser.GameObjects.Text;
+  private playActiveTimer?: Phaser.GameObjects.Graphics;
+  private playActiveEndTime: number = 0;
+  
+  showPlayActive(play: string, duration: number): void {
+    const width = this.scene.cameras.main.width;
+    
+    // Create container if needed
+    if (!this.playActiveContainer) {
+      this.playActiveContainer = this.scene.add.container(width / 2, 130);
+      this.playActiveContainer.setScrollFactor(0);
+      this.playActiveContainer.setDepth(100);
+      
+      // Background
+      const bg = this.scene.add.graphics();
+      bg.fillStyle(0x1a1a2e, 0.9);
+      bg.fillRoundedRect(-80, -18, 160, 36, 8);
+      this.playActiveContainer.add(bg);
+      
+      // Timer ring
+      this.playActiveTimer = this.scene.add.graphics();
+      this.playActiveContainer.add(this.playActiveTimer);
+      
+      // Text
+      this.playActiveText = this.scene.add.text(0, 0, '', {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '16px',
+        color: '#ffffff'
+      });
+      this.playActiveText.setOrigin(0.5, 0.5);
+      this.playActiveContainer.add(this.playActiveText);
+      
+      this.container.add(this.playActiveContainer);
+    }
+    
+    // Set play text
+    const playNames: Record<string, string> = {
+      press: '🏃 PRESS',
+      hold: '🛡️ HOLD',
+      counter: '⚡ COUNTER'
+    };
+    this.playActiveText?.setText(playNames[play] || play.toUpperCase());
+    this.playActiveContainer.setVisible(true);
+    this.playActiveEndTime = this.scene.time.now + duration;
+    
+    // Update timer
+    this.updatePlayTimer();
+  }
+  
+  private updatePlayTimer(): void {
+    if (!this.playActiveTimer || !this.playActiveContainer) return;
+    
+    const now = this.scene.time.now;
+    const remaining = Math.max(0, this.playActiveEndTime - now);
+    
+    if (remaining <= 0) {
+      this.playActiveContainer.setVisible(false);
+      return;
+    }
+    
+    // Draw timer ring
+    const totalDuration = 8000;
+    const progress = remaining / totalDuration;
+    
+    this.playActiveTimer.clear();
+    this.playActiveTimer.lineStyle(3, 0xf39c12, 1);
+    this.playActiveTimer.arc(60, 0, 12, Phaser.Math.DegToRad(-90), Phaser.Math.DegToRad(-90 + 360 * progress), false);
+    this.playActiveTimer.strokePath();
+  }
+  
+  // ========================================
+  // ACTIVE BUFFS ROW
+  // ========================================
+  
+  private buffsContainer?: Phaser.GameObjects.Container;
+  private buffIcons: Map<string, Phaser.GameObjects.Container> = new Map();
+  
+  updateActiveBuffs(buffs: { id: string; name: string; icon: string; timeRemaining: number; source: string }[]): void {
+    const width = this.scene.cameras.main.width;
+    
+    // Create container if needed
+    if (!this.buffsContainer) {
+      this.buffsContainer = this.scene.add.container(width - 200, 120);
+      this.buffsContainer.setScrollFactor(0);
+      this.buffsContainer.setDepth(100);
+      this.container.add(this.buffsContainer);
+    }
+    
+    // Remove old buff icons not in new list
+    const newIds = new Set(buffs.map(b => b.id));
+    this.buffIcons.forEach((icon, id) => {
+      if (!newIds.has(id)) {
+        icon.destroy();
+        this.buffIcons.delete(id);
+      }
+    });
+    
+    // Update or create buff icons
+    let x = 0;
+    for (const buff of buffs.slice(0, 6)) {
+      let iconContainer = this.buffIcons.get(buff.id);
+      
+      if (!iconContainer) {
+        iconContainer = this.scene.add.container(x, 0);
+        
+        // Background
+        const bg = this.scene.add.circle(0, 0, 18, this.getBuffColor(buff.source), 0.8);
+        iconContainer.add(bg);
+        
+        // Icon text
+        const iconText = this.scene.add.text(0, 0, buff.icon || '⬆️', {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '14px'
+        });
+        iconText.setOrigin(0.5, 0.5);
+        iconContainer.add(iconText);
+        
+        // Timer ring
+        const timerRing = this.scene.add.graphics();
+        timerRing.setName('timer');
+        iconContainer.add(timerRing);
+        
+        this.buffsContainer.add(iconContainer);
+        this.buffIcons.set(buff.id, iconContainer);
+      }
+      
+      // Update timer ring
+      const timerRing = iconContainer.getByName('timer') as Phaser.GameObjects.Graphics;
+      if (timerRing && buff.timeRemaining > 0) {
+        const progress = Math.min(1, buff.timeRemaining / 5000);  // Assume 5s max for display
+        timerRing.clear();
+        timerRing.lineStyle(2, 0xffffff, 0.8);
+        timerRing.arc(0, 0, 18, Phaser.Math.DegToRad(-90), Phaser.Math.DegToRad(-90 + 360 * progress), false);
+        timerRing.strokePath();
+      }
+      
+      iconContainer.setPosition(x, 0);
+      x += 42;
+    }
+  }
+  
+  private getBuffColor(source: string): number {
+    switch (source) {
+      case 'upgrade': return 0x9b59b6;
+      case 'synergy': return 0xf39c12;
+      case 'play': return 0x3498db;
+      case 'giveAndGo': return 0x2ecc71;
+      case 'curse': return 0xe74c3c;
+      default: return 0x7f8c8d;
+    }
+  }
+  
+  // Show Give-and-Go popup
+  showGiveAndGo(): void {
+    const popup = this.scene.add.text(
+      this.scene.cameras.main.centerX,
+      this.scene.cameras.main.centerY - 80,
+      '🔄 GIVE & GO!',
+      {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '32px',
+        color: '#2ecc71',
+        stroke: '#000000',
+        strokeThickness: 4
+      }
+    );
+    popup.setOrigin(0.5, 0.5);
+    popup.setScrollFactor(0);
+    popup.setDepth(500);
+    popup.setScale(0);
+    
+    this.scene.tweens.add({
+      targets: popup,
+      scale: 1,
+      duration: 150,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.scene.time.delayedCall(600, () => {
+          this.scene.tweens.add({
+            targets: popup,
+            alpha: 0,
+            y: popup.y - 40,
+            duration: 300,
+            onComplete: () => popup.destroy()
+          });
+        });
+      }
+    });
+  }
+  
+  // Show synergy activated popup
+  showSynergyActivated(synergyName: string, tier: number): void {
+    const popup = this.scene.add.text(
+      this.scene.cameras.main.centerX,
+      this.scene.cameras.main.centerY - 60,
+      `⚡ ${synergyName.toUpperCase()} T${tier}!`,
+      {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '28px',
+        color: '#f39c12',
+        stroke: '#000000',
+        strokeThickness: 4
+      }
+    );
+    popup.setOrigin(0.5, 0.5);
+    popup.setScrollFactor(0);
+    popup.setDepth(500);
+    popup.setScale(0);
+    
+    this.scene.tweens.add({
+      targets: popup,
+      scale: 1,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.scene.time.delayedCall(1000, () => {
+          this.scene.tweens.add({
+            targets: popup,
+            alpha: 0,
+            y: popup.y - 40,
+            duration: 400,
+            onComplete: () => popup.destroy()
+          });
+        });
+      }
+    });
+  }
+  
   // Update possession indicator
   updatePossession(hasPlayerPossession: boolean): void {
     if (!this.possessionIndicator || !this.possessionText) return;

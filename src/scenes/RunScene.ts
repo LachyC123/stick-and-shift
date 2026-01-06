@@ -17,6 +17,7 @@ import { AISystem } from '../systems/AISystem';
 import { ParticleManager } from '../gfx/Particles';
 import { TrailManager } from '../entities/TrailSegment';
 import { UpgradeDraftOverlay } from '../ui/UpgradeDraftOverlay';
+import { BuildScreenOverlay } from '../ui/BuildScreenOverlay';
 import { ToastManager } from '../ui/Toast';
 import { SaveSystem } from '../systems/SaveSystem';
 import * as TUNING from '../data/tuning';
@@ -439,11 +440,24 @@ export class RunScene extends Phaser.Scene {
       );
       this.updateUpgradeDebugOverlay();
     });
+    
+    // TAB toggles Build Screen
+    this.input.keyboard?.on('keydown-TAB', (event: KeyboardEvent) => {
+      event.preventDefault();
+      this.toggleBuildScreen();
+    });
+    
+    // 1/2/3 for Play Calling
+    this.input.keyboard?.on('keydown-ONE', () => this.callPlay('press'));
+    this.input.keyboard?.on('keydown-TWO', () => this.callPlay('hold'));
+    this.input.keyboard?.on('keydown-THREE', () => this.callPlay('counter'));
   }
   
   private debugStealMoment: boolean = false;
   private debugUpgrades: boolean = false;
   private upgradeDebugText?: Phaser.GameObjects.Text;
+  private buildScreenOpen: boolean = false;
+  private buildScreenOverlay?: any;
   
   private updateUpgradeDebugOverlay(): void {
     if (!this.debugUpgrades) {
@@ -487,6 +501,169 @@ export class RunScene extends Phaser.Scene {
     
     this.upgradeDebugText.setText(lines.filter(l => l).join('\n'));
     this.upgradeDebugText.setVisible(true);
+  }
+  
+  // ========================================
+  // BUILD SCREEN (TAB)
+  // ========================================
+  
+  private toggleBuildScreen(): void {
+    if (this.buildScreenOpen) {
+      this.closeBuildScreen();
+    } else {
+      this.openBuildScreen();
+    }
+  }
+  
+  private openBuildScreen(): void {
+    if (this.buildScreenOpen) return;
+    
+    this.buildScreenOpen = true;
+    this.physics.pause();  // Pause gameplay
+    
+    const cupState = this.momentSystem.getCupState();
+    const moment = this.momentSystem.getCurrentMoment();
+    const progress = this.momentSystem.getProgress();
+    const curseName = this.uiSystem.getActiveCurseName();
+    
+    // Get curse details if active
+    let activeCurse = null;
+    if (curseName && cupState.activeCurseId) {
+      import('../data/curses').then(({ getCurseById }) => {
+        const curse = getCurseById(cupState.activeCurseId!);
+        if (curse) {
+          activeCurse = {
+            name: curse.name,
+            boonDescription: curse.boonDescription,
+            curseDescription: curse.curseDescription
+          };
+        }
+      });
+    }
+    
+    this.buildScreenOverlay = new BuildScreenOverlay(this, {
+      upgradeSystem: this.upgradeSystem,
+      character: this.character,
+      baseStats: this.character.stats,
+      cupPlayerPoints: cupState.playerPoints,
+      cupEnemyPoints: cupState.enemyPoints,
+      currentMoment: progress.current,
+      objectiveText: moment?.description || 'Score!',
+      activeCurse: curseName ? {
+        name: curseName,
+        boonDescription: 'Active curse effect',
+        curseDescription: 'Curse penalty active'
+      } : null,
+      onClose: () => this.closeBuildScreen()
+    });
+  }
+  
+  private closeBuildScreen(): void {
+    if (!this.buildScreenOpen) return;
+    
+    this.buildScreenOpen = false;
+    this.buildScreenOverlay?.destroy();
+    this.buildScreenOverlay = null;
+    this.physics.resume();  // Resume gameplay
+  }
+  
+  // ========================================
+  // PLAY CALLING (1/2/3)
+  // ========================================
+  
+  private callPlay(play: 'press' | 'hold' | 'counter'): void {
+    if (this.buildScreenOpen) return;
+    
+    const success = this.upgradeSystem.callPlay(play);
+    
+    if (success) {
+      // Show banner
+      this.showPlayCalledBanner(play);
+      this.audioSystem.playUpgrade();  // Play a sound
+      
+      // Update AI behavior
+      this.applyPlayToAI(play);
+      
+      // Update HUD
+      this.uiSystem.showPlayActive(play, 8000);
+    } else {
+      // On cooldown
+      const state = this.upgradeSystem.getActivePlay();
+      const cooldownSec = Math.ceil(state.cooldownRemaining / 1000);
+      this.toastManager.info(`Play on cooldown: ${cooldownSec}s`, '⏳');
+    }
+  }
+  
+  private showPlayCalledBanner(play: string): void {
+    const playNames: Record<string, string> = {
+      press: '🏃 PRESS!',
+      hold: '🛡️ HOLD!',
+      counter: '⚡ COUNTER!'
+    };
+    
+    const banner = this.add.text(
+      this.cameras.main.centerX,
+      this.cameras.main.centerY - 100,
+      playNames[play] || play.toUpperCase(),
+      {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '48px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 4
+      }
+    );
+    banner.setOrigin(0.5, 0.5);
+    banner.setScrollFactor(0);
+    banner.setDepth(500);
+    banner.setScale(0);
+    
+    // Animate
+    this.tweens.add({
+      targets: banner,
+      scale: 1,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.time.delayedCall(800, () => {
+          this.tweens.add({
+            targets: banner,
+            alpha: 0,
+            y: banner.y - 50,
+            duration: 400,
+            onComplete: () => banner.destroy()
+          });
+        });
+      }
+    });
+  }
+  
+  private applyPlayToAI(play: 'press' | 'hold' | 'counter'): void {
+    // Emit event for AISystem to pick up
+    this.events.emit('playCallChanged', play);
+    
+    // Also set on AISystem directly
+    this.aiSystem.setActivePlay(play);
+    
+    console.log(`[PLAY] ${play.toUpperCase()} called`);
+  }
+  
+  private updateActiveBuffsUI(): void {
+    // Get active buffs from UpgradeSystem
+    const buffs = this.upgradeSystem.getActiveBuffs();
+    const now = this.time.now;
+    
+    // Format buffs for UI
+    const uiBuffs = buffs.map(buff => ({
+      id: buff.id,
+      name: buff.name,
+      icon: buff.icon,
+      timeRemaining: buff.expiresAt - now,
+      source: buff.source
+    }));
+    
+    // Update UI
+    this.uiSystem.updateActiveBuffs(uiBuffs);
   }
   
   private updateDebugDisplay(): void {
@@ -1091,6 +1268,24 @@ export class RunScene extends Phaser.Scene {
     
     this.upgradeSystem.on('upgradeAdded', (upgrade: any) => {
       this.uiSystem.addUpgradeIcon(upgrade.icon, upgrade.name, upgrade.rarity);
+    });
+    
+    // Synergy activation
+    this.upgradeSystem.on('synergyActivated', (data: any) => {
+      this.uiSystem.showSynergyActivated(data.name, data.tier);
+      this.audioSystem.playUpgrade();
+      this.toastManager.success(`${data.name} T${data.tier} activated!`, '⚡');
+    });
+    
+    // Give-and-Go activation
+    this.upgradeSystem.on('giveAndGoActivated', (data: any) => {
+      this.uiSystem.showGiveAndGo();
+      this.toastManager.success('Give & Go!', '🔄');
+    });
+    
+    // Play calling event
+    this.upgradeSystem.on('playCalled', (data: any) => {
+      this.uiSystem.showPlayActive(data.play, data.duration);
     });
   }
   
@@ -1823,6 +2018,9 @@ export class RunScene extends Phaser.Scene {
     if (this.debugUpgrades) {
       this.updateUpgradeDebugOverlay();
     }
+    
+    // Update active buffs UI
+    this.updateActiveBuffsUI();
     
     // Update teammates
     this.teammates.forEach((t) => t.update(delta));
