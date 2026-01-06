@@ -168,41 +168,70 @@ After each moment, choose from 3 upgrade cards. Build synergies for bonus effect
 
 ## 🌐 Deploy to GitHub Pages
 
+### ⚠️ Important: Configure Pages Source
+
+GitHub Pages **must** be configured to use GitHub Actions as the source, not a branch.
+
+1. Go to your repository **Settings** → **Pages**
+2. Under "Build and deployment", change **Source** to **GitHub Actions**
+3. Save
+
+If the source is set to a branch (like `gh-pages` or `main`), it will serve the source files instead of the built `dist/` folder.
+
 ### Automatic Deployment
 
-The repository includes a GitHub Actions workflow that automatically deploys to GitHub Pages when you push to the `main` branch.
+The repository includes a GitHub Actions workflow (`.github/workflows/deploy.yml`) that:
 
-1. Go to your repository **Settings** > **Pages**
-2. Under "Build and deployment", select **GitHub Actions** as the source
-3. Push to `main` and the workflow will build and deploy automatically
+1. Triggers on push to `main`
+2. Builds the project with `GITHUB_PAGES=true`
+3. Uploads the `dist/` folder
+4. Deploys to GitHub Pages
+
+After configuring the source (above), just push to `main` and the workflow runs automatically.
+
+### Verify the Deployment
+
+After deployment, your game should be at:
+```
+https://<username>.github.io/stick-and-shift/
+```
+
+**If you see errors requesting `/src/main.ts`:** This means the source is wrong. Go to Settings → Pages and change Source to "GitHub Actions".
+
+### Local Build Verification
+
+```bash
+# Build with GitHub Pages configuration
+GITHUB_PAGES=true npm run build
+
+# Preview the built site
+npm run preview
+
+# Verify dist/index.html references assets/*, not /src/main.ts
+grep "script.*src" dist/index.html
+# Should output: <script ... src="/stick-and-shift/assets/index-XXXXX.js">
+```
+
+### Configuration for Different Repository Names
+
+If your repository is named something other than `stick-and-shift`:
+
+1. Update `vite.config.ts`:
+   ```typescript
+   const repoName = 'your-repo-name';  // Change this line
+   ```
+
+2. The deploy workflow uses the same name, so also update `.github/workflows/deploy.yml` if you changed the `REPO_NAME` env var.
 
 ### Manual Deployment
 
 ```bash
-# Build the project
-npm run build
+# Build for GitHub Pages
+GITHUB_PAGES=true npm run build
 
 # The dist/ folder contains the production build
 # Deploy this folder to your hosting provider
 ```
-
-### Configuration
-
-The `vite.config.ts` automatically sets the correct base path for GitHub Pages when `GITHUB_PAGES=true` or `GITHUB_ACTIONS=true` environment variables are set.
-
-**If your repository is named something other than `stick-and-shift`:**
-
-1. Update `vite.config.ts`:
-   ```typescript
-   const repoName = process.env.REPO_NAME || 'your-repo-name';
-   ```
-
-2. Update `.github/workflows/deploy.yml`:
-   ```yaml
-   env:
-     GITHUB_PAGES: 'true'
-     REPO_NAME: 'your-repo-name'
-   ```
 
 ## 🎨 Adding New Content
 

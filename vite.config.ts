@@ -1,13 +1,17 @@
 import { defineConfig } from 'vite';
 
-// Get repository name from environment or default
-// For GitHub Pages, set GITHUB_PAGES=true and optionally REPO_NAME
-const isGitHubPages = process.env.GITHUB_PAGES === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const repoName = process.env.REPO_NAME || 'stick-and-shift';
+// GitHub Pages deployment configuration
+// GITHUB_PAGES env var is set by the deploy workflow
+const isGitHubPages = process.env.GITHUB_PAGES === 'true';
+
+// Repository name for GitHub Pages base path
+// Change this if your repo has a different name
+const repoName = 'stick-and-shift';
 
 export default defineConfig({
-  // Base path for GitHub Pages deployment
-  // Change 'stick-and-shift' to your repository name if different
+  // Base path: 
+  // - Production on GitHub Pages: /repo-name/
+  // - Local development: /
   base: isGitHubPages ? `/${repoName}/` : '/',
   
   build: {
