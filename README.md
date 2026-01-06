@@ -275,6 +275,46 @@ MIT License - feel free to use this project as a base for your own games!
 
 ## 📋 CHANGELOG
 
+### v1.2.0 - Game Feel & AI Improvements
+
+#### A) Pass + Shoot Physics (Tuning System)
+- New `/src/data/tuning.ts` with all physics constants in one place
+- `PASS_SPEED_BASE=720`, `SHOT_SPEED_BASE=980` for snappy ball movement
+- Ball drag reduced (`BALL_DRAG=0.988`) so shots/passes travel properly
+- `ball.kick()` unified method for all ball propulsion
+- Visual pass line effect for feedback
+- Camera shake on shots and tackles
+
+#### B) Goal Detection (Reliable Scoring)
+- Goal sensors now cover full goal mouth with depth behind line
+- `ball.crossedLine()` tracks previous position for fast ball crossing detection
+- `GOAL_COOLDOWN` prevents double-scoring
+- Ball is immediately moved to safe position on goal
+- Press `G` to toggle debug view of goal sensor rectangles
+- Goals always register if ball enters goal mouth area
+
+#### C) Smarter AI (No More Huddling)
+- Lane blocking detection with `AI_LANE_WIDTH` for smarter passing decisions
+- Dribble target finding avoids enemies and moves toward goal
+- Chaser hysteresis prevents constant switching of ball chaser
+- Decision rate-limiting (`AI_DECISION_INTERVAL=220ms`) for consistent behavior
+- Tackle backoff prevents spam after failed tackles
+- Formation positions adjust based on ball position
+
+#### D) Upgrade Proc Feedback
+- `procUpgrade(id, intensity)` method for tracking and showing feedback
+- Upgrade icons pulse with rarity-colored glow when they activate
+- Toast notification appears for high-intensity procs
+- Proc counts tracked per moment for summary
+- `getTopProcs(limit)` returns most-used upgrades
+
+#### E) Code Quality
+- All tuning constants in one file for easy balancing
+- Consistent use of tuning constants across Player, Ball, AI
+- TypeScript strict mode compatible
+
+---
+
 ### v1.1.1 - Loading Screen Fix
 
 #### Boot Scene Reliability
