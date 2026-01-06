@@ -14,6 +14,7 @@ export interface MomentState {
   isWon: boolean;
   objectiveProgress: number;
   objectiveTarget: number;
+  failReason?: string;  // Why moment was lost (e.g., "Player overwhelmed")
 }
 
 /** Simplified objective descriptor for AI to consume */
@@ -472,6 +473,17 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
     if (isComplete) {
       this.completeMoment(isWon);
     }
+  }
+  
+  /**
+   * Public method to force-fail a moment (e.g., player death)
+   */
+  failMoment(reason: string = 'Unknown'): void {
+    console.log(`[MOMENT] Force-failing: ${reason}`);
+    if (this.currentState) {
+      this.currentState.failReason = reason;
+    }
+    this.completeMoment(false);
   }
   
   private completeMoment(isWon: boolean): void {

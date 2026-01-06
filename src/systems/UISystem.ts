@@ -84,6 +84,24 @@ export class UISystem {
   private debugOverlay?: Phaser.GameObjects.Container;
   private debugVisible: boolean = false;
   
+  // HEALTH & STAMINA HUD (Part C)
+  private healthStaminaContainer?: Phaser.GameObjects.Container;
+  private healthBarBg?: Phaser.GameObjects.Graphics;
+  private healthBarFill?: Phaser.GameObjects.Graphics;
+  private healthText?: Phaser.GameObjects.Text;
+  private staminaBarBg?: Phaser.GameObjects.Graphics;
+  private staminaBarFill?: Phaser.GameObjects.Graphics;
+  private staminaText?: Phaser.GameObjects.Text;
+  private dashIcon?: Phaser.GameObjects.Text;
+  private currentHealth: number = 100;
+  private targetHealth: number = 100;
+  private currentStamina: number = 100;
+  private targetStamina: number = 100;
+  
+  // PROC ICON (Part B)
+  private procIconContainer?: Phaser.GameObjects.Container;
+  private activeProcIcons: Array<{ container: Phaser.GameObjects.Container; expiresAt: number }> = [];
+  
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
     this.container = scene.add.container(0, 0);
@@ -144,8 +162,11 @@ export class UISystem {
     // Cup Run Card (prominent, professional design)
     this.createCupRunCard();
     
+    // HEALTH & STAMINA BARS (Part C)
+    this.createHealthStaminaBars();
+    
     // Active curse indicator (below Cup Run card)
-    this.curseActiveText = this.scene.add.text(20, 110, '', {
+    this.curseActiveText = this.scene.add.text(20, 160, '', {
       fontFamily: 'Arial, sans-serif',
       fontSize: '14px',
       color: '#ff6600',
@@ -888,6 +909,271 @@ export class UISystem {
     // Inner glow at top
     this.cupRunBg.fillStyle(0xffffff, 0.05);
     this.cupRunBg.fillRoundedRect(2, 2, width - 4, height / 3, 6);
+  }
+  
+  // ========================================
+  // HEALTH & STAMINA BARS (Part C)
+  // ========================================
+  
+  private createHealthStaminaBars(): void {
+    const barX = 15;
+    const barY = 110;
+    const barWidth = 160;
+    const barHeight = 16;
+    const barGap = 6;
+    
+    this.healthStaminaContainer = this.scene.add.container(barX, barY);
+    this.healthStaminaContainer.setScrollFactor(0);
+    this.healthStaminaContainer.setDepth(101);
+    
+    // === HEALTH BAR ===
+    // Background
+    this.healthBarBg = this.scene.add.graphics();
+    this.healthBarBg.fillStyle(0x1a1a2e, 0.9);
+    this.healthBarBg.fillRoundedRect(0, 0, barWidth, barHeight, 4);
+    this.healthBarBg.lineStyle(1, 0xe74c3c, 0.5);
+    this.healthBarBg.strokeRoundedRect(0, 0, barWidth, barHeight, 4);
+    this.healthStaminaContainer.add(this.healthBarBg);
+    
+    // Fill
+    this.healthBarFill = this.scene.add.graphics();
+    this.drawHealthBar(100);
+    this.healthStaminaContainer.add(this.healthBarFill);
+    
+    // Heart icon
+    const heartIcon = this.scene.add.text(-2, -2, '❤️', {
+      fontFamily: 'Arial',
+      fontSize: '14px'
+    });
+    heartIcon.setOrigin(0, 0);
+    this.healthStaminaContainer.add(heartIcon);
+    
+    // Health text
+    this.healthText = this.scene.add.text(barWidth - 5, barHeight / 2, '100', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '11px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    });
+    this.healthText.setOrigin(1, 0.5);
+    this.healthStaminaContainer.add(this.healthText);
+    
+    // === STAMINA BAR ===
+    const staminaY = barHeight + barGap;
+    
+    // Background
+    this.staminaBarBg = this.scene.add.graphics();
+    this.staminaBarBg.fillStyle(0x1a1a2e, 0.9);
+    this.staminaBarBg.fillRoundedRect(0, staminaY, barWidth, barHeight, 4);
+    this.staminaBarBg.lineStyle(1, 0xf39c12, 0.5);
+    this.staminaBarBg.strokeRoundedRect(0, staminaY, barWidth, barHeight, 4);
+    this.healthStaminaContainer.add(this.staminaBarBg);
+    
+    // Fill
+    this.staminaBarFill = this.scene.add.graphics();
+    this.drawStaminaBar(100, staminaY);
+    this.healthStaminaContainer.add(this.staminaBarFill);
+    
+    // Lightning icon
+    const lightningIcon = this.scene.add.text(-2, staminaY - 2, '⚡', {
+      fontFamily: 'Arial',
+      fontSize: '14px'
+    });
+    this.healthStaminaContainer.add(lightningIcon);
+    
+    // Stamina text
+    this.staminaText = this.scene.add.text(barWidth - 5, staminaY + barHeight / 2, '100', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '11px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    });
+    this.staminaText.setOrigin(1, 0.5);
+    this.healthStaminaContainer.add(this.staminaText);
+    
+    // Dash indicator icon
+    this.dashIcon = this.scene.add.text(barWidth + 5, staminaY + barHeight / 2, '💨', {
+      fontFamily: 'Arial',
+      fontSize: '16px'
+    });
+    this.dashIcon.setOrigin(0, 0.5);
+    this.healthStaminaContainer.add(this.dashIcon);
+  }
+  
+  private drawHealthBar(percent: number): void {
+    if (!this.healthBarFill) return;
+    
+    const barWidth = 160;
+    const barHeight = 16;
+    const fillWidth = Math.max(0, (barWidth - 4) * (percent / 100));
+    
+    this.healthBarFill.clear();
+    
+    // Color based on health (green -> yellow -> red)
+    let color: number;
+    if (percent > 60) {
+      color = 0x2ecc71;  // Green
+    } else if (percent > 30) {
+      color = 0xf39c12;  // Yellow
+    } else {
+      color = 0xe74c3c;  // Red
+    }
+    
+    this.healthBarFill.fillStyle(color, 0.9);
+    this.healthBarFill.fillRoundedRect(2, 2, fillWidth, barHeight - 4, 3);
+    
+    // Highlight on top
+    this.healthBarFill.fillStyle(0xffffff, 0.2);
+    this.healthBarFill.fillRect(2, 2, fillWidth, (barHeight - 4) / 3);
+  }
+  
+  private drawStaminaBar(percent: number, yOffset: number): void {
+    if (!this.staminaBarFill) return;
+    
+    const barWidth = 160;
+    const barHeight = 16;
+    const fillWidth = Math.max(0, (barWidth - 4) * (percent / 100));
+    
+    this.staminaBarFill.clear();
+    
+    // Color based on stamina (blue -> faded)
+    let color: number;
+    let alpha: number;
+    if (percent > 30) {
+      color = 0x3498db;  // Blue
+      alpha = 0.9;
+    } else if (percent > 0) {
+      color = 0x95a5a6;  // Gray
+      alpha = 0.7;
+    } else {
+      color = 0x7f8c8d;  // Dark gray
+      alpha = 0.5;
+    }
+    
+    this.staminaBarFill.fillStyle(color, alpha);
+    this.staminaBarFill.fillRoundedRect(2, yOffset + 2, fillWidth, barHeight - 4, 3);
+    
+    // Highlight on top
+    this.staminaBarFill.fillStyle(0xffffff, 0.2);
+    this.staminaBarFill.fillRect(2, yOffset + 2, fillWidth, (barHeight - 4) / 3);
+  }
+  
+  /**
+   * Update health bar (called from RunScene)
+   */
+  updateHealth(health: number, maxHealth: number): void {
+    this.targetHealth = (health / maxHealth) * 100;
+    
+    // Animate the bar
+    this.currentHealth = Phaser.Math.Linear(this.currentHealth, this.targetHealth, 0.15);
+    this.drawHealthBar(this.currentHealth);
+    
+    // Update text
+    if (this.healthText) {
+      this.healthText.setText(Math.ceil(health).toString());
+      
+      // Flash on damage
+      if (health < maxHealth && this.targetHealth < this.currentHealth - 1) {
+        this.scene.tweens.add({
+          targets: this.healthText,
+          tint: 0xff0000,
+          duration: 100,
+          yoyo: true
+        });
+      }
+    }
+  }
+  
+  /**
+   * Update stamina bar (called from RunScene)
+   */
+  updateStamina(stamina: number, maxStamina: number, canDash: boolean): void {
+    this.targetStamina = (stamina / maxStamina) * 100;
+    
+    // Animate the bar
+    this.currentStamina = Phaser.Math.Linear(this.currentStamina, this.targetStamina, 0.2);
+    this.drawStaminaBar(this.currentStamina, 16 + 6);  // barHeight + barGap
+    
+    // Update text
+    if (this.staminaText) {
+      this.staminaText.setText(Math.ceil(stamina).toString());
+    }
+    
+    // Update dash icon (show/hide based on canDash)
+    if (this.dashIcon) {
+      this.dashIcon.setAlpha(canDash ? 1 : 0.3);
+    }
+  }
+  
+  // ========================================
+  // PROC ICON ABOVE PLAYER (Part B)
+  // ========================================
+  
+  /**
+   * Show a proc icon above the player's position
+   */
+  showProcIcon(iconEmoji: string, upgradeName: string, player: any): void {
+    // Create container at player position
+    const container = this.scene.add.container(player.x, player.y - 50);
+    container.setDepth(150);
+    
+    // Icon background
+    const bg = this.scene.add.graphics();
+    bg.fillStyle(0x000000, 0.7);
+    bg.fillCircle(0, 0, 18);
+    bg.lineStyle(2, 0xf39c12, 0.8);
+    bg.strokeCircle(0, 0, 18);
+    container.add(bg);
+    
+    // Icon emoji
+    const icon = this.scene.add.text(0, 0, iconEmoji, {
+      fontFamily: 'Arial',
+      fontSize: '20px'
+    });
+    icon.setOrigin(0.5);
+    container.add(icon);
+    
+    // Animate: pop in, float up, fade out
+    container.setScale(0);
+    
+    this.scene.tweens.add({
+      targets: container,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      duration: 100,
+      ease: 'Back.easeOut',
+      yoyo: true,
+      repeat: 0,
+      onComplete: () => {
+        container.setScale(1);
+      }
+    });
+    
+    this.scene.tweens.add({
+      targets: container,
+      y: container.y - 40,
+      alpha: 0,
+      duration: 1000,
+      ease: 'Quad.easeOut',
+      delay: 200,
+      onComplete: () => {
+        container.destroy();
+      }
+    });
+    
+    // Track for cleanup
+    this.activeProcIcons.push({ container, expiresAt: this.scene.time.now + 1200 });
+    
+    // Cleanup expired icons
+    this.activeProcIcons = this.activeProcIcons.filter(p => {
+      if (this.scene.time.now > p.expiresAt) {
+        if (p.container && p.container.scene) {
+          p.container.destroy();
+        }
+        return false;
+      }
+      return true;
+    });
   }
   
   // Update Cup Run score display with animations

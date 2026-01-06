@@ -200,6 +200,80 @@ export const GOAL_SENSOR_DEPTH = 24;
 export const D_CIRCLE_RADIUS = 150;
 
 // ============================================================
+// HEALTH SYSTEM
+// ============================================================
+
+/** Player max health */
+export const PLAYER_MAX_HEALTH = 100;
+/** Base damage per successful tackle taken */
+export const TACKLE_DAMAGE_BASE = 18;
+/** Health regen per second (0 = no passive regen) */
+export const HEALTH_REGEN_PER_SEC = 0;
+
+// ============================================================
+// STAMINA SYSTEM
+// ============================================================
+
+/** Player max stamina */
+export const PLAYER_MAX_STAMINA = 100;
+/** Stamina cost per dash */
+export const DASH_STAMINA_COST = 28;
+/** Stamina regen per second when not dashing */
+export const STAMINA_REGEN_PER_SEC = 18;
+/** Reduced regen rate while holding ball */
+export const STAMINA_REGEN_BALL_MULT = 0.7;
+
+// ============================================================
+// AI DEFENSE PLANNER (TeamDefensePlanner)
+// ============================================================
+
+/** How often defense roles are reassigned (ms) */
+export const DEFENSE_PLANNER_INTERVAL = 140;
+/** Hysteresis time - keep roles for at least this long (ms) */
+export const DEFENSE_ROLE_HYSTERESIS = 700;
+/** Danger zone distance from own goal (pixels) */
+export const DANGER_ZONE_DISTANCE = 350;
+/** Central corridor width (pixels) */
+export const CENTRAL_CORRIDOR_WIDTH = 350;
+
+/** Last man distance from goal */
+export const LAST_MAN_RADIUS_MIN = 100;
+export const LAST_MAN_RADIUS_MAX = 170;
+/** Shot blocker position on ball->goal line (0-1, 0=at ball, 1=at goal) */
+export const SHOT_BLOCKER_POSITION = 0.35;
+
+/** Tackle commit window duration (ms) - AI commits to tackle attempt */
+export const TACKLE_COMMIT_DURATION = 250;
+/** AI tackle range (increased for harder defense) */
+export const AI_TACKLE_RANGE_COMMIT = 75;
+
+// ============================================================
+// ADVANTAGE PLAY (after clean tackle)
+// ============================================================
+
+/** Advantage buff duration after clean steal (ms) */
+export const ADVANTAGE_DURATION = 3000;
+/** Speed bonus during advantage (percent) */
+export const ADVANTAGE_SPEED_BONUS = 15;
+/** Pass speed bonus during advantage (percent) */
+export const ADVANTAGE_PASS_BONUS = 20;
+/** Shot speed bonus during advantage (percent) */
+export const ADVANTAGE_SHOT_BONUS = 15;
+
+// ============================================================
+// PENALTY CORNER (PC)
+// ============================================================
+
+/** PC setup time before play starts (ms) */
+export const PC_SETUP_TIME = 2000;
+/** PC injector pass speed */
+export const PC_INJECT_SPEED = 800;
+/** PC shot power multiplier (drag flick power) */
+export const PC_SHOT_POWER_MULT = 1.3;
+/** PC circle radius for positioning */
+export const PC_CIRCLE_RADIUS = 150;
+
+// ============================================================
 // CAMERA / FEEL
 // ============================================================
 
