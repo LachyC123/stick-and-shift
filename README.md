@@ -184,13 +184,21 @@ npm run build
 
 ### Configuration
 
-The `vite.config.ts` automatically sets the correct base path for GitHub Pages when the `GITHUB_ACTIONS` environment variable is set.
+The `vite.config.ts` automatically sets the correct base path for GitHub Pages when `GITHUB_PAGES=true` or `GITHUB_ACTIONS=true` environment variables are set.
 
-If your repository is named something other than `stick-and-shift`, update the base path in `vite.config.ts`:
+**If your repository is named something other than `stick-and-shift`:**
 
-```typescript
-base: process.env.GITHUB_ACTIONS ? '/your-repo-name/' : '/',
-```
+1. Update `vite.config.ts`:
+   ```typescript
+   const repoName = process.env.REPO_NAME || 'your-repo-name';
+   ```
+
+2. Update `.github/workflows/deploy.yml`:
+   ```yaml
+   env:
+     GITHUB_PAGES: 'true'
+     REPO_NAME: 'your-repo-name'
+   ```
 
 ## 🎨 Adding New Content
 

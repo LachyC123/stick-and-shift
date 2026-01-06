@@ -36,7 +36,10 @@ jobs:
       - name: Build project
         run: npm run build
         env:
-          GITHUB_ACTIONS: true
+          GITHUB_PAGES: 'true'
+          GITHUB_ACTIONS: 'true'
+          # Change this to your repository name if different from 'stick-and-shift'
+          REPO_NAME: 'stick-and-shift'
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
