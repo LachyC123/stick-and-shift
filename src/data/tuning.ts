@@ -196,6 +196,8 @@ export const GOAL_COOLDOWN = 1200;
 export const GOAL_MOUTH_HEIGHT = 120;
 /** Goal sensor depth (extends behind line to catch fast balls) */
 export const GOAL_SENSOR_DEPTH = 24;
+/** D-circle (shooting circle) radius */
+export const D_CIRCLE_RADIUS = 150;
 
 // ============================================================
 // CAMERA / FEEL

@@ -10,6 +10,7 @@ export class TeammateAI extends Phaser.Physics.Arcade.Sprite {
   public aiSystem!: AISystem;  // Will be set externally from RunScene
   private currentDecision?: AIDecision;
   private decisionTimer: number = 0;
+  public currentState: string = 'idle';  // For debug display
   
   // Stuck detection
   private lastPosition: { x: number; y: number } = { x: 0, y: 0 };
@@ -126,22 +127,41 @@ export class TeammateAI extends Phaser.Physics.Arcade.Sprite {
   }
   
   private executeDecision(delta: number): void {
-    if (!this.currentDecision) return;
+    if (!this.currentDecision) {
+      this.currentState = 'no_decision';
+      return;
+    }
     
     const decision = this.currentDecision;
     
+    // Update current state for debug
+    if (this.hasBall) {
+      this.currentState = 'CARRIER';
+    } else if (decision.action === 'tackle') {
+      this.currentState = 'PRESS';
+    } else if (decision.priority >= 7) {
+      this.currentState = 'DEFEND';
+    } else if (decision.priority >= 5) {
+      this.currentState = 'SUPPORT';
+    } else {
+      this.currentState = 'SHAPE';
+    }
+    
     switch (decision.action) {
       case 'move':
+        this.currentState = this.hasBall ? 'CARRIER' : (decision.priority >= 6 ? 'SUPPORT' : 'MOVE');
         this.moveToward(decision.targetX!, decision.targetY!, delta);
         break;
         
       case 'shoot':
+        this.currentState = 'SHOOT';
         if (this.hasBall) {
           this.shoot(decision.targetX!, decision.targetY!);
         }
         break;
         
       case 'pass':
+        this.currentState = 'PASS';
         if (this.hasBall && decision.targetEntity) {
           this.pass(decision.targetEntity);
         }

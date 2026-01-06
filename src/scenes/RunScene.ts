@@ -431,6 +431,11 @@ export class RunScene extends Phaser.Scene {
       }
     });
     
+    // F7 toggles sandbox test (places player in D with ball)
+    this.input.keyboard?.on('keydown-F7', () => {
+      this.toggleSandboxTest();
+    });
+    
     // F8 toggles upgrade debug overlay
     this.input.keyboard?.on('keydown-F8', () => {
       this.debugUpgrades = !this.debugUpgrades;
@@ -439,6 +444,16 @@ export class RunScene extends Phaser.Scene {
         'Debug'
       );
       this.updateUpgradeDebugOverlay();
+    });
+    
+    // F9 toggles AI debug overlay
+    this.input.keyboard?.on('keydown-F9', () => {
+      this.debugAI = !this.debugAI;
+      this.toastManager.info(
+        this.debugAI ? 'AI debug: ON' : 'AI debug: OFF',
+        'Debug'
+      );
+      this.updateAIDebugOverlay();
     });
     
     // TAB toggles Build Screen
@@ -451,6 +466,132 @@ export class RunScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-ONE', () => this.callPlay('press'));
     this.input.keyboard?.on('keydown-TWO', () => this.callPlay('hold'));
     this.input.keyboard?.on('keydown-THREE', () => this.callPlay('counter'));
+  }
+  
+  // ========================================
+  // SANDBOX TEST (F7)
+  // ========================================
+  
+  private sandboxTestActive: boolean = false;
+  
+  private toggleSandboxTest(): void {
+    this.sandboxTestActive = !this.sandboxTestActive;
+    
+    if (this.sandboxTestActive) {
+      console.log('[SANDBOX] Activating test - placing player in D with ball');
+      
+      // Place player in the attacking D (right side)
+      const dX = this.fieldWidth - 150;  // In the D circle
+      const dY = this.fieldHeight / 2;
+      
+      this.player.setPosition(dX, dY);
+      this.player.hasBall = true;
+      this.player.receiveBall();
+      
+      // Move ball to player
+      this.ball.setPosition(dX + 20, dY);
+      this.ball.owner = this.player;
+      
+      // Move enemies away
+      this.enemies.forEach((e, i) => {
+        e.setPosition(300 + i * 50, 200 + i * 100);
+      });
+      
+      this.toastManager.info('Sandbox: Player in D with ball', '🧪');
+      
+      // Log state
+      const inD = this.isPointInAttackingD('player', this.player.x, this.player.y);
+      console.log(`[SANDBOX] Player at (${this.player.x}, ${this.player.y})`);
+      console.log(`[SANDBOX] In attacking D: ${inD}`);
+      console.log(`[SANDBOX] Has ball: ${this.player.hasBall}`);
+      console.log(`[SANDBOX] Can shoot: ${this.player.canShoot()}`);
+    } else {
+      this.toastManager.info('Sandbox: Deactivated', '🧪');
+    }
+  }
+  
+  // ========================================
+  // AI DEBUG OVERLAY (F9)
+  // ========================================
+  
+  private debugAI: boolean = false;
+  private aiDebugLabels: Phaser.GameObjects.Text[] = [];
+  private aiDebugText?: Phaser.GameObjects.Text;
+  
+  private updateAIDebugOverlay(): void {
+    // Clear old labels
+    this.aiDebugLabels.forEach(l => l.destroy());
+    this.aiDebugLabels = [];
+    
+    if (!this.debugAI) {
+      this.aiDebugText?.setVisible(false);
+      return;
+    }
+    
+    // Show AI state labels above each AI entity
+    [...this.teammates, ...this.enemies].forEach((ai, idx) => {
+      const config = ai.aiConfig || {};
+      const state = ai.currentState || 'unknown';
+      const role = config.role || 'unknown';
+      const isEnemy = this.enemies.includes(ai as any);
+      
+      const label = this.add.text(ai.x, ai.y - 40, `${role}\n${state}`, {
+        fontFamily: 'monospace',
+        fontSize: '9px',
+        color: isEnemy ? '#ff6666' : '#66ff66',
+        backgroundColor: '#000000aa',
+        padding: { x: 2, y: 1 },
+        align: 'center'
+      });
+      label.setOrigin(0.5);
+      label.setDepth(300);
+      this.aiDebugLabels.push(label);
+    });
+    
+    // Create/update summary text
+    if (!this.aiDebugText) {
+      this.aiDebugText = this.add.text(10, 200, '', {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: '#ffff00',
+        backgroundColor: '#000000cc',
+        padding: { x: 6, y: 4 }
+      });
+      this.aiDebugText.setScrollFactor(0);
+      this.aiDebugText.setDepth(500);
+    }
+    
+    // Build summary
+    const ballOwner = this.ball.owner;
+    const ballOwnerType = ballOwner 
+      ? (this.enemies.includes(ballOwner) ? 'ENEMY' : (ballOwner === this.player ? 'PLAYER' : 'TEAMMATE'))
+      : 'LOOSE';
+    
+    const objective = this.momentSystem.getObjectiveDescriptor();
+    const play = this.aiSystem.getActivePlay();
+    
+    const lines = [
+      '=== AI DEBUG (F9) ===',
+      `Ball: ${ballOwnerType}`,
+      `Objective: ${objective.type}`,
+      `Active Play: ${play || 'none'}`,
+      '',
+      'Enemies:',
+      ...this.enemies.slice(0, 3).map((e, i) => {
+        const state = e.currentState || 'unknown';
+        const dist = Phaser.Math.Distance.Between(e.x, e.y, this.player.x, this.player.y);
+        return `  ${i}: ${state} (${Math.round(dist)}px)`;
+      }),
+      '',
+      'Teammates:',
+      ...this.teammates.slice(0, 3).map((t, i) => {
+        const state = t.currentState || 'unknown';
+        return `  ${i}: ${state}`;
+      })
+    ];
+    
+    this.aiDebugText.setText(lines.join('\n'));
+    this.aiDebugText.setVisible(true);
   }
   
   private debugStealMoment: boolean = false;
@@ -468,7 +609,7 @@ export class RunScene extends Phaser.Scene {
     if (!this.upgradeDebugText) {
       this.upgradeDebugText = this.add.text(this.cameras.main.width - 10, 80, '', {
         fontFamily: 'monospace',
-        fontSize: '11px',
+        fontSize: '10px',
         color: '#00ff00',
         backgroundColor: '#000000cc',
         padding: { x: 8, y: 6 }
@@ -482,21 +623,52 @@ export class RunScene extends Phaser.Scene {
     const cupState = this.momentSystem.getCupState();
     const curseName = this.uiSystem.getActiveCurseName();
     
+    // Get debug info from UpgradeSystem
+    const debugInfo = this.upgradeSystem.getDebugInfo();
+    const topProcs = this.upgradeSystem.getTopProcs(5);
+    const modifiers = debugInfo.modifiers;
+    
+    // Player state
+    const playerHasBall = this.player.hasBall;
+    const inAttackingD = this.isPointInAttackingD('player', this.player.x, this.player.y);
+    const canShoot = this.player.canShoot();
+    
     const lines = [
       '=== UPGRADE DEBUG (F8) ===',
-      `Active Upgrades: ${upgrades.length}`,
-      ...upgrades.slice(0, 8).map(u => `  • ${u.name}`),
-      upgrades.length > 8 ? `  ... +${upgrades.length - 8} more` : '',
       '',
-      '=== CUP RUN ===',
-      `Score: You ${cupState.playerPoints} - ${cupState.enemyPoints} Enemy`,
-      `Ended: ${cupState.isEnded}`,
-      `Winner: ${cupState.winner || 'none'}`,
+      '--- PLAYER STATE ---',
+      `Has Ball: ${playerHasBall}`,
+      `In Attacking D: ${inAttackingD}`,
+      `Can Shoot: ${canShoot}`,
       '',
-      '=== CURSES ===',
-      `Triggered: ${cupState.comebackCursesTriggered}`,
-      `Active: ${curseName || 'none'}`,
-      `Curse ID: ${cupState.activeCurseId || 'none'}`,
+      '--- UPGRADES ---',
+      `Active: ${upgrades.length}`,
+      ...upgrades.slice(0, 6).map(u => `  • ${u.name}`),
+      upgrades.length > 6 ? `  ... +${upgrades.length - 6} more` : '',
+      '',
+      '--- EVENT STATS/SEC ---',
+      `tick: ${debugInfo.eventStats.tick} | shot: ${debugInfo.eventStats.shot}`,
+      `pass: ${debugInfo.eventStats.pass} | tackle: ${debugInfo.eventStats.tackle}`,
+      `steal: ${debugInfo.eventStats.steal} | receive: ${debugInfo.eventStats.receive}`,
+      '',
+      '--- HOOKS REGISTERED ---',
+      ...Object.entries(debugInfo.hookCounts).filter(([k, v]) => v > 0).map(([k, v]) => `  ${k}: ${v}`),
+      '',
+      '--- RECENT PROCS ---',
+      ...debugInfo.recentProcs.slice(0, 5).map(p => `  ${p.upgradeName}`),
+      debugInfo.recentProcs.length === 0 ? '  (none)' : '',
+      '',
+      '--- TOP PROCS ---',
+      ...topProcs.map(p => `  ${p.upgradeName}: ${p.count}x`),
+      topProcs.length === 0 ? '  (none)' : '',
+      '',
+      '--- STAT MODIFIERS ---',
+      ...Object.entries(modifiers).slice(0, 6).map(([k, v]) => `  ${k}: +${v}%`),
+      Object.keys(modifiers).length === 0 ? '  (none)' : '',
+      '',
+      '--- CUP RUN ---',
+      `You ${cupState.playerPoints} - ${cupState.enemyPoints} Enemy`,
+      `Curse: ${curseName || 'none'}`,
     ];
     
     this.upgradeDebugText.setText(lines.filter(l => l).join('\n'));
@@ -1263,7 +1435,13 @@ export class RunScene extends Phaser.Scene {
     
     // Upgrade proc events
     this.upgradeSystem.on('upgradeProc', (data: any) => {
-      this.uiSystem.showUpgradeProc(data.upgrade, data.intensity);
+      // Create a minimal upgrade object for the UI
+      const upgrade = { 
+        id: data.upgradeId, 
+        name: data.upgradeName 
+      };
+      this.uiSystem.showUpgradeProc(upgrade as any, data.intensity);
+      console.log(`[UPGRADE_PROC] ${data.upgradeName} (intensity: ${data.intensity})`);
     });
     
     this.upgradeSystem.on('upgradeAdded', (upgrade: any) => {
@@ -1286,6 +1464,34 @@ export class RunScene extends Phaser.Scene {
     // Play calling event
     this.upgradeSystem.on('playCalled', (data: any) => {
       this.uiSystem.showPlayActive(data.play, data.duration);
+    });
+    
+    // AUTO SHOT EVENT - triggered by Auto Hit in D upgrade
+    this.upgradeSystem.on('autoShot', (data: any) => {
+      console.log('[AUTO_SHOT] Event received:', data);
+      
+      if (this.player.hasBall && this.player.canShoot()) {
+        // Calculate aim toward enemy goal
+        const goalX = this.fieldWidth - 20;
+        const goalY = this.fieldHeight / 2 + (Math.random() - 0.5) * 60;
+        const aimAngle = Math.atan2(goalY - this.player.y, goalX - this.player.x);
+        
+        // Perform the shot
+        const success = this.player.tryShoot(aimAngle, 0.3);
+        if (success) {
+          console.log('[AUTO_SHOT] Shot executed!');
+          this.toastManager.success('Auto Hit!', '🎯');
+        }
+      }
+    });
+    
+    // Cooldown reset events
+    this.upgradeSystem.on('cooldownReset', (cooldownType: string) => {
+      console.log(`[COOLDOWN_RESET] ${cooldownType}`);
+    });
+    
+    this.upgradeSystem.on('allCooldownsReset', () => {
+      console.log('[COOLDOWN_RESET] All cooldowns!');
     });
   }
   
@@ -1548,10 +1754,11 @@ export class RunScene extends Phaser.Scene {
         // Stats for player
         if (tackler === this.player) {
           this.momentStats.tacklesWon++;
-          this.upgradeSystem.trigger('onSteal', {
+          this.upgradeSystem.emitEvent('steal', {
             player: this.player,
             target: carrier,
-            scene: this
+            scene: this,
+            time: this.time.now
           });
           SaveSystem.getInstance().incrementStat('totalSteals');
         }
@@ -1614,9 +1821,10 @@ export class RunScene extends Phaser.Scene {
       
       this.momentSystem.playerScored(isRebound, isFromAssist);
       
-      this.upgradeSystem.trigger('onGoal', {
+      this.upgradeSystem.emitEvent('goal', {
         player: this.player,
-        scene: this
+        scene: this,
+        time: this.time.now
       });
       
       SaveSystem.getInstance().incrementStat('totalGoals');
@@ -2070,13 +2278,79 @@ export class RunScene extends Phaser.Scene {
       this.updateGoalSensorDebug();
     }
     
-    // Trigger onTick upgrades
-    this.upgradeSystem.trigger('onTick', {
+    // Update AI debug if enabled
+    if (this.debugAI) {
+      this.updateAIDebugOverlay();
+    }
+    
+    // Trigger onTick upgrades with FULL CONTEXT
+    const playerHasBall = this.player.hasBall;
+    const playerInAttackingD = this.isPointInAttackingD('player', this.player.x, this.player.y);
+    const playerInDefendingD = this.isPointInDefendingD('player', this.player.x, this.player.y);
+    const playerCanShoot = this.player.canShoot();
+    const playerCanPass = this.player.canPass();
+    const playerIsStationary = !this.player.isMoving || (
+      Math.abs(this.player.body?.velocity?.x || 0) < 20 &&
+      Math.abs(this.player.body?.velocity?.y || 0) < 20
+    );
+    
+    // Get moment time remaining
+    const state = this.momentSystem.getCurrentState();
+    const momentTimeRemaining = state?.timeRemaining || 0;
+    
+    // Check if player is losing
+    const cupState = this.momentSystem.getCupState();
+    const isLosing = cupState.enemyPoints > cupState.playerPoints;
+    
+    this.upgradeSystem.emitEvent('tick', {
       player: this.player,
       ball: this.ball,
-      position: { x: this.player.x, y: this.player.y },
-      scene: this
+      scene: this,
+      time: time,
+      delta: delta,
+      playerHasBall,
+      playerInAttackingD,
+      playerInDefendingD,
+      playerCanShoot,
+      playerCanPass,
+      playerIsStationary,
+      momentTimeRemaining,
+      isLosing,
+      possessionTime: this.momentStats.possessionTime
     });
+  }
+  
+  // ========================================
+  // D-CIRCLE HELPERS
+  // ========================================
+  
+  /**
+   * Check if a point is in the attacking D-circle for a team
+   * For player team: attacking is the RIGHT goal (enemy goal)
+   */
+  private isPointInAttackingD(team: 'player' | 'enemy', x: number, y: number): boolean {
+    const dRadius = TUNING.D_CIRCLE_RADIUS;
+    const goalY = this.fieldHeight / 2;
+    
+    if (team === 'player') {
+      // Player attacks right goal (enemy goal at x = fieldWidth)
+      const goalX = this.fieldWidth - 30;
+      const dist = Phaser.Math.Distance.Between(x, y, goalX, goalY);
+      return dist < dRadius && x > this.fieldWidth - dRadius - 50;
+    } else {
+      // Enemy attacks left goal (player goal at x = 0)
+      const goalX = 30;
+      const dist = Phaser.Math.Distance.Between(x, y, goalX, goalY);
+      return dist < dRadius && x < dRadius + 50;
+    }
+  }
+  
+  /**
+   * Check if a point is in the defending D-circle for a team
+   */
+  private isPointInDefendingD(team: 'player' | 'enemy', x: number, y: number): boolean {
+    // Defending D is the opposite of attacking D
+    return this.isPointInAttackingD(team === 'player' ? 'enemy' : 'player', x, y);
   }
   
   private togglePause(): void {
