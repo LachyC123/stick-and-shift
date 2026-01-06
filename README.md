@@ -60,15 +60,16 @@ The production build will be in the `dist/` folder.
 | Shoot | Space or Left Click (tap for quick shot) |
 | Charged Shot | Hold Space or Mouse, release for power shot |
 | Pass | E |
+| Call for Pass | R (request ball from teammates) |
 | Tackle | Q |
 | Dodge | Shift |
 | Aim | Mouse (or auto-aim toward goal if keyboard only) |
 | Pause | Escape or P |
 | Toggle Controls | H (in-game) |
 | Goal Debug | G (shows goal sensor outlines) |
-| Debug Display | F1 (shows possession, objective, AI state) |
+| Debug Display | F1 (shows possession, objective, AI state, passes) |
 
-> **Tip**: Hold shoot to charge up for a powerful shot (up to +35% power)!
+> **Tip**: Press R to call for pass! Teammates will prioritize passing to you when the lane is clear.
 
 ## 🏆 Game Structure
 
@@ -326,6 +327,54 @@ MIT License - feel free to use this project as a base for your own games!
 - `applyKnockback()` and `applyHitstop()` methods on Player
 - Cleaner separation of objective logic in MomentSystem
 - Type-safe objective descriptor interface
+
+---
+
+### v1.4.0 - Team Passing System
+
+#### A) AI Passing to Teammates + Player
+- Comprehensive `findBestPassTarget()` with scoring: lane clearness, forward progress, receiver openness, distance
+- AI carrier brain evaluates PASS / SHOOT / DRIBBLE every 200ms
+- Passes triggered when pressured, teammate in better position, or objective encourages possession
+- Player calling bonus: teammates prioritize passing to player when R is pressed
+- Pass cooldown (`AI_CARRIER_PASS_COOLDOWN=650ms`) prevents spam
+
+#### B) Call for Pass Input
+- Press R to call for pass (sets `isCallingForPass` for 1.2s)
+- Visible "CALLING!" indicator above player in debug mode
+- Teammates add +35 bonus score when considering player as pass target
+- Works even without calling if player is open in a good lane
+
+#### C) Off-Ball Support Movement
+- Forward: makes runs into space ahead of ball
+- Midfielder: triangle support positions for passing angles
+- Defender: stays behind ball as safety outlet
+- `applyTeammateSeparation()` prevents clustering
+- Dynamic positioning based on ball carrier location
+
+#### D) Enemy Team Passing
+- Enemy AI uses same carrier brain logic
+- Passes under pressure, switches play when blocked
+- `getEnemyDangerScore()` evaluates who is in best position
+- Creates realistic team play patterns
+
+#### E) Receive Assist
+- `ball.pass()` now tracks intended receiver
+- Ball curves slightly toward receiver within `PASS_RECEIVE_RADIUS=60px`
+- `PASS_NO_RECAPTURE_MS=120ms` window prevents instant stick-back to passer
+- `canBePickedUpBy()` check in all ball pickup handlers
+
+#### F) Debug Visualization
+- F1 shows pass completion, calling state
+- Green arrow line drawn when pass is made (debug mode)
+- "CALLING!" text above player when requesting pass
+- Pass lane visualization for debugging
+
+#### G) New Tuning Constants
+- `PASS_WEIGHT_LANE=30`, `PASS_WEIGHT_PROGRESS=20`, `PASS_WEIGHT_SPACE=25`
+- `PASS_PLAYER_CALL_BONUS=35` for player priority
+- `PASS_SCORE_THRESHOLD=20` minimum for valid pass
+- `SUPPORT_TRIANGLE_OFFSET=100`, `SUPPORT_MIN_SEPARATION=70`
 
 ---
 

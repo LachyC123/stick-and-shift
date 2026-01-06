@@ -23,6 +23,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   public recentlyLostBall: boolean = false;
   public isCharging: boolean = false;
   public isHitstop: boolean = false;
+  public isCallingForPass: boolean = false;
+  private callingForPassUntil: number = 0;
   
   // Stamina
   public stamina: number = 100;
@@ -177,6 +179,17 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
   
   private processActions(input: InputState): void {
+    // === CALL FOR PASS ===
+    if (input.callForPass && !this.hasBall) {
+      this.callForPass();
+    }
+    
+    // Update calling state
+    if (this.callingForPassUntil > 0 && this.scene.time.now > this.callingForPassUntil) {
+      this.isCallingForPass = false;
+      this.callingForPassUntil = 0;
+    }
+    
     // === CHARGED SHOT ===
     // Start charging on press
     if (input.shoot && this.hasBall && this.shootCooldown <= 0) {
@@ -611,9 +624,24 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   
   // === EXTERNAL METHODS ===
   
+  /**
+   * Call for pass - signals teammates to pass the ball
+   */
+  callForPass(): void {
+    this.isCallingForPass = true;
+    this.callingForPassUntil = this.scene.time.now + TUNING.PASS_CALL_DURATION;
+    
+    // Clear when we get the ball
+    // (handled in receiveBall)
+  }
+  
   receiveBall(): void {
     this.hasBall = true;
     this.justReceivedBall = true;
+    
+    // Stop calling for pass
+    this.isCallingForPass = false;
+    this.callingForPassUntil = 0;
     
     this.upgradeSystem?.trigger('onReceive', {
       player: this,

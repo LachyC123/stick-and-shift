@@ -203,6 +203,47 @@ export const PASS_ASSIST_MAX_DIST = 350;
 export const PASS_CONTROL_RADIUS = 45;
 
 // ============================================================
+// AI PASSING SYSTEM
+// ============================================================
+
+/** No-recapture window after pass (prevents instant stick-back) */
+export const PASS_NO_RECAPTURE_MS = 120;
+/** Time ball curves toward intended receiver */
+export const PASS_RECEIVE_ASSIST_MS = 280;
+/** Receive assist radius - ball curves toward receiver within this distance */
+export const PASS_RECEIVE_RADIUS = 60;
+/** Receive assist strength (0-1) */
+export const PASS_RECEIVE_CURVE = 0.03;
+
+/** Bonus score for player calling for pass */
+export const PASS_PLAYER_CALL_BONUS = 35;
+/** Duration of "calling for pass" state (ms) */
+export const PASS_CALL_DURATION = 1200;
+
+/** Minimum score to consider a pass target valid */
+export const PASS_SCORE_THRESHOLD = 20;
+/** AI carrier brain decision interval (ms) */
+export const CARRIER_BRAIN_INTERVAL = 200;
+/** AI pass cooldown per entity (ms) */
+export const AI_CARRIER_PASS_COOLDOWN = 650;
+
+/** Weight: lane clearness in pass scoring */
+export const PASS_WEIGHT_LANE = 30;
+/** Weight: forward progress in pass scoring */
+export const PASS_WEIGHT_PROGRESS = 20;
+/** Weight: receiver openness (space) in pass scoring */
+export const PASS_WEIGHT_SPACE = 25;
+/** Weight: distance penalty (per 100px deviation from ideal) */
+export const PASS_WEIGHT_DISTANCE = 10;
+/** Ideal pass distance */
+export const PASS_IDEAL_DISTANCE = 150;
+
+/** Support movement: triangle offset from carrier */
+export const SUPPORT_TRIANGLE_OFFSET = 100;
+/** Support movement: minimum separation between teammates */
+export const SUPPORT_MIN_SEPARATION = 70;
+
+// ============================================================
 // SHOT SPIN / CURVE
 // ============================================================
 

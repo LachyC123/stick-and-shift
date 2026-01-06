@@ -17,6 +17,7 @@ export interface InputState {
   pass: boolean;
   tackle: boolean;
   dodge: boolean;
+  callForPass: boolean;  // R key - request pass from teammates
   
   // Mouse
   aimAngle: number;
@@ -42,6 +43,7 @@ export class InputSystem {
     shift: Phaser.Input.Keyboard.Key;
     e: Phaser.Input.Keyboard.Key;
     q: Phaser.Input.Keyboard.Key;
+    r: Phaser.Input.Keyboard.Key;  // Call for pass
     escape: Phaser.Input.Keyboard.Key;
     enter: Phaser.Input.Keyboard.Key;
     p: Phaser.Input.Keyboard.Key;
@@ -80,6 +82,7 @@ export class InputSystem {
       shift: this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT),
       e: this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E),
       q: this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q),
+      r: this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R),
       escape: this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC),
       enter: this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER),
       p: this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.P),
@@ -111,6 +114,7 @@ export class InputSystem {
       pass: false,
       tackle: false,
       dodge: false,
+      callForPass: false,
       aimAngle: 0,
       aimX: 0,
       aimY: 0,
@@ -165,6 +169,7 @@ export class InputSystem {
       state.dodge = Phaser.Input.Keyboard.JustDown(this.actionKeys.shift);
       state.pass = Phaser.Input.Keyboard.JustDown(this.actionKeys.e);
       state.tackle = Phaser.Input.Keyboard.JustDown(this.actionKeys.q);
+      state.callForPass = Phaser.Input.Keyboard.JustDown(this.actionKeys.r);
       
       // UI
       state.pause = Phaser.Input.Keyboard.JustDown(this.actionKeys.escape) || 

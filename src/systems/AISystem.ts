@@ -354,13 +354,33 @@ export class AISystem {
     return false;
   }
   
+  /**
+   * Carrier brain for teammate with ball - decide: PASS / SHOOT / DRIBBLE
+   */
   private getOffensiveDecision(entity: any, ball: any, player: any, teammates: any[], enemies: any[], config: AIConfig): AIDecision {
     const goalX = this.fieldWidth;
     const goalY = this.fieldHeight / 2;
     
     const distToGoal = Phaser.Math.Distance.Between(entity.x, entity.y, goalX, goalY);
     
-    // Check shooting opportunity
+    // Count nearby pressure
+    const nearbyEnemies = enemies.filter(e =>
+      Phaser.Math.Distance.Between(entity.x, entity.y, e.x, e.y) < TUNING.AI_PRESSURE_RADIUS
+    );
+    const isPressured = nearbyEnemies.length > 0;
+    
+    const canPass = !this.isOnPassCooldown(entity);
+    
+    // === CHECK FOR PLAYER CALLING FOR PASS (highest priority) ===
+    if (canPass && player.isCallingForPass) {
+      const passTarget = this.findBestPassTarget(entity, player, teammates, enemies, true);
+      if (passTarget === player) {
+        this.setPassCooldown(entity);
+        return { action: 'pass', targetEntity: player, priority: 12 };
+      }
+    }
+    
+    // === CHECK SHOOTING OPPORTUNITY ===
     if (distToGoal < TUNING.AI_SHOOT_RANGE && config.skill > 0.35) {
       const angleToGoal = Math.atan2(goalY - entity.y, goalX - entity.x);
       const hasGoodAngle = Math.abs(angleToGoal) < TUNING.AI_SHOOT_ANGLE_THRESHOLD;
@@ -371,27 +391,46 @@ export class AISystem {
         return distToEnemy < 70 && e.x > entity.x;
       });
       
-      if (blockers.length === 0 && hasGoodAngle) {
+      if (blockers.length === 0 && hasGoodAngle && !isPressured) {
         return { action: 'shoot', targetX: goalX, targetY: goalY, priority: 10 };
       }
     }
     
-    // Check for pressure - pass if needed
-    const nearbyEnemies = enemies.filter(e =>
-      Phaser.Math.Distance.Between(entity.x, entity.y, e.x, e.y) < TUNING.AI_PRESSURE_RADIUS
-    );
-    
-    const canPass = !this.isOnPassCooldown(entity);
-    
-    if (nearbyEnemies.length > 0 && canPass) {
+    // === PASS WHEN PRESSURED ===
+    if (isPressured && canPass) {
       const passTarget = this.findBestPassTarget(entity, player, teammates, enemies, true);
       if (passTarget) {
         this.setPassCooldown(entity);
-        return { action: 'pass', targetEntity: passTarget, priority: 8 };
+        return { action: 'pass', targetEntity: passTarget, priority: 9 };
       }
     }
     
-    // Poor shooting angle but in range - look for pass
+    // === PASS IF TEAMMATE IS IN BETTER POSITION ===
+    if (canPass) {
+      const passTarget = this.findBestPassTarget(entity, player, teammates, enemies, true);
+      if (passTarget) {
+        // Check if teammate is significantly more dangerous
+        const myDangerScore = this.getDangerScore(entity, goalX, goalY, enemies);
+        const targetDangerScore = this.getDangerScore(passTarget, goalX, goalY, enemies);
+        
+        // Pass if teammate is clearly better positioned
+        if (targetDangerScore > myDangerScore + 15) {
+          this.setPassCooldown(entity);
+          return { action: 'pass', targetEntity: passTarget, priority: 8 };
+        }
+      }
+    }
+    
+    // === PASS WHEN OBJECTIVE ENCOURAGES POSSESSION ===
+    if (canPass && this.currentObjective.type === 'hold_possession') {
+      const passTarget = this.findBestPassTarget(entity, player, teammates, enemies, true);
+      if (passTarget && Math.random() < 0.4) {  // 40% chance to pass when safe
+        this.setPassCooldown(entity);
+        return { action: 'pass', targetEntity: passTarget, priority: 7 };
+      }
+    }
+    
+    // === POOR SHOOTING ANGLE - LOOK FOR PASS ===
     if (distToGoal < 280 && canPass) {
       const angleToGoal = Math.atan2(goalY - entity.y, goalX - entity.x);
       const absAngle = Math.abs(angleToGoal);
@@ -405,9 +444,33 @@ export class AISystem {
       }
     }
     
-    // Dribble toward goal - find space
+    // === DRIBBLE TOWARD GOAL ===
     const moveTarget = this.findDribbleTarget(entity, enemies, goalX, goalY);
     return { action: 'move', targetX: moveTarget.x, targetY: moveTarget.y, priority: 5 };
+  }
+  
+  /**
+   * Calculate how "dangerous" a player is (higher = closer to goal, more open)
+   */
+  private getDangerScore(entity: any, goalX: number, goalY: number, enemies: any[]): number {
+    const distToGoal = Phaser.Math.Distance.Between(entity.x, entity.y, goalX, goalY);
+    const angleToGoal = Math.atan2(goalY - entity.y, goalX - entity.x);
+    
+    // Distance score (closer = higher)
+    const distScore = (1 - distToGoal / this.fieldWidth) * 50;
+    
+    // Angle score (central = higher)
+    const angleScore = (1 - Math.abs(angleToGoal) / Math.PI) * 30;
+    
+    // Openness score
+    let minEnemyDist = Infinity;
+    for (const enemy of enemies) {
+      const d = Phaser.Math.Distance.Between(entity.x, entity.y, enemy.x, enemy.y);
+      if (d < minEnemyDist) minEnemyDist = d;
+    }
+    const openScore = Math.min(minEnemyDist / 100, 1) * 20;
+    
+    return distScore + angleScore + openScore;
   }
   
   private getLooseBallDecision(entity: any, ball: any, player: any, teammates: any[], enemies: any[], config: AIConfig, isPlayerTeam: boolean, slotIndex: number): AIDecision {
@@ -437,13 +500,151 @@ export class AISystem {
     return { action: 'move', targetX: formationPos.x, targetY: formationPos.y, priority: 3 };
   }
   
+  /**
+   * Off-ball movement when teammate has the ball
+   * Creates passing triangles and support positions
+   */
   private getSupportDecision(entity: any, ball: any, player: any, teammates: any[], enemies: any[], config: AIConfig, slotIndex: number): AIDecision {
     const ballCarrier = ball.owner || player;
     
-    // Get position that offers a passing option
-    const supportPos = this.getPassingLanePosition(entity, ballCarrier, config.role, true, enemies);
+    // Role-based support behavior
+    const goalX = this.fieldWidth;  // Attack goal
+    const allTeammates = [player, ...teammates].filter(t => t !== entity);
     
-    return { action: 'move', targetX: supportPos.x, targetY: supportPos.y, priority: 6 };
+    let targetPos: { x: number; y: number };
+    
+    switch (config.role) {
+      case 'forward':
+        // Make a run ahead into space
+        targetPos = this.getForwardRunPosition(entity, ballCarrier, enemies, goalX);
+        break;
+        
+      case 'midfielder':
+        // Triangle support - offer a passing angle
+        targetPos = this.getTriangleSupportPosition(entity, ballCarrier, allTeammates, enemies, true);
+        break;
+        
+      case 'defender':
+      default:
+        // Stay behind the ball as safety
+        targetPos = this.getDefensiveSupportPosition(entity, ballCarrier, enemies, true);
+        break;
+    }
+    
+    // Apply separation from teammates
+    targetPos = this.applyTeammateSeparation(targetPos, entity, allTeammates);
+    
+    return { action: 'move', targetX: targetPos.x, targetY: targetPos.y, priority: 6 };
+  }
+  
+  /**
+   * Get position for forward to make a run into space
+   */
+  private getForwardRunPosition(entity: any, carrier: any, enemies: any[], goalX: number): { x: number; y: number } {
+    // Run ahead of the ball toward goal
+    let targetX = carrier.x + TUNING.SUPPORT_TRIANGLE_OFFSET * 1.2;
+    let targetY = entity.y;
+    
+    // Find space - avoid enemies
+    let bestY = entity.y;
+    let bestDist = 0;
+    
+    for (let testY = 100; testY < this.fieldHeight - 100; testY += 60) {
+      let minEnemyDist = Infinity;
+      for (const e of enemies) {
+        const d = Phaser.Math.Distance.Between(targetX, testY, e.x, e.y);
+        if (d < minEnemyDist) minEnemyDist = d;
+      }
+      if (minEnemyDist > bestDist) {
+        bestDist = minEnemyDist;
+        bestY = testY;
+      }
+    }
+    
+    targetY = Phaser.Math.Linear(entity.y, bestY, 0.3);
+    targetX = Phaser.Math.Clamp(targetX, 100, this.fieldWidth - 80);
+    
+    return { x: targetX, y: targetY };
+  }
+  
+  /**
+   * Get triangle support position - form passing triangles
+   */
+  private getTriangleSupportPosition(
+    entity: any, 
+    carrier: any, 
+    teammates: any[], 
+    enemies: any[], 
+    isPlayerTeam: boolean
+  ): { x: number; y: number } {
+    const goalX = isPlayerTeam ? this.fieldWidth : 0;
+    const dirToGoal = isPlayerTeam ? 1 : -1;
+    
+    // Calculate angle from carrier to goal
+    const angleToGoal = Math.atan2(this.fieldHeight / 2 - carrier.y, goalX - carrier.x);
+    
+    // Position at an angle from carrier (triangle vertex)
+    // Alternate sides based on entity position
+    const offsetAngle = entity.y < carrier.y 
+      ? angleToGoal - Math.PI / 4  // Upper triangle
+      : angleToGoal + Math.PI / 4;  // Lower triangle
+    
+    let targetX = carrier.x + Math.cos(offsetAngle) * TUNING.SUPPORT_TRIANGLE_OFFSET;
+    let targetY = carrier.y + Math.sin(offsetAngle) * TUNING.SUPPORT_TRIANGLE_OFFSET;
+    
+    // Ensure we stay ahead for attack or behind for defense
+    if (isPlayerTeam) {
+      targetX = Math.max(targetX, carrier.x + 30);
+    } else {
+      targetX = Math.min(targetX, carrier.x - 30);
+    }
+    
+    // Stay in bounds
+    targetX = Phaser.Math.Clamp(targetX, 80, this.fieldWidth - 80);
+    targetY = Phaser.Math.Clamp(targetY, 80, this.fieldHeight - 80);
+    
+    return { x: targetX, y: targetY };
+  }
+  
+  /**
+   * Defensive support - stay behind ball as outlet
+   */
+  private getDefensiveSupportPosition(entity: any, carrier: any, enemies: any[], isPlayerTeam: boolean): { x: number; y: number } {
+    const behindDir = isPlayerTeam ? -1 : 1;
+    
+    let targetX = carrier.x + behindDir * 80;
+    let targetY = carrier.y + (entity.y > this.fieldHeight / 2 ? -50 : 50);
+    
+    targetX = Phaser.Math.Clamp(targetX, 60, this.fieldWidth - 60);
+    targetY = Phaser.Math.Clamp(targetY, 60, this.fieldHeight - 60);
+    
+    return { x: targetX, y: targetY };
+  }
+  
+  /**
+   * Apply separation from teammates to avoid clustering
+   */
+  private applyTeammateSeparation(pos: { x: number; y: number }, entity: any, teammates: any[]): { x: number; y: number } {
+    let pushX = 0;
+    let pushY = 0;
+    
+    for (const t of teammates) {
+      if (t === entity) continue;
+      const dx = pos.x - t.x;
+      const dy = pos.y - t.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      if (dist < TUNING.SUPPORT_MIN_SEPARATION && dist > 0) {
+        const push = (TUNING.SUPPORT_MIN_SEPARATION - dist) / TUNING.SUPPORT_MIN_SEPARATION;
+        pushX += (dx / dist) * push * 30;
+        pushY += (dy / dist) * push * 30;
+      }
+    }
+    
+    return {
+      x: Phaser.Math.Clamp(pos.x + pushX, 60, this.fieldWidth - 60),
+      y: Phaser.Math.Clamp(pos.y + pushY, 60, this.fieldHeight - 60)
+    };
   }
   
   private getDefensiveDecision(entity: any, ball: any, player: any, teammates: any[], enemies: any[], config: AIConfig, slotIndex: number): AIDecision {
@@ -497,48 +698,155 @@ export class AISystem {
     return { action: 'move', targetX: formationPos.x, targetY: formationPos.y, priority: 5 };
   }
   
+  /**
+   * Enemy carrier brain - decide: PASS / SHOOT / DRIBBLE
+   * Enemy teams should also pass to each other, creating team-like play
+   */
   private getEnemyOffensiveDecision(entity: any, ball: any, player: any, teammates: any[], enemies: any[], config: AIConfig): AIDecision {
-    const goalX = 0;
+    const goalX = 0;  // Enemy goal is on the left
     const goalY = this.fieldHeight / 2;
+    const defenders = [player, ...teammates];
     
     const distToGoal = Phaser.Math.Distance.Between(entity.x, entity.y, goalX, goalY);
     
-    // Shoot if in range with clear shot
+    // Count nearby pressure
+    const nearbyDefenders = defenders.filter(t =>
+      Phaser.Math.Distance.Between(entity.x, entity.y, t.x, t.y) < TUNING.AI_PRESSURE_RADIUS
+    );
+    const isPressured = nearbyDefenders.length > 0;
+    
+    const canPass = !this.isOnPassCooldown(entity);
+    const otherEnemies = enemies.filter(e => e !== entity);
+    
+    // === PASS WHEN PRESSURED (first priority after immediate danger) ===
+    if (isPressured && canPass && otherEnemies.length > 0) {
+      const passTarget = this.findBestPassTarget(entity, null, otherEnemies, defenders, false);
+      if (passTarget) {
+        this.setPassCooldown(entity);
+        return { action: 'pass', targetEntity: passTarget, priority: 9 };
+      }
+    }
+    
+    // === CHECK SHOOTING OPPORTUNITY ===
     if (distToGoal < TUNING.AI_SHOOT_RANGE + config.skill * 40) {
-      const blockers = [player, ...teammates].filter(t => {
+      const blockers = defenders.filter(t => {
         const distToDefender = Phaser.Math.Distance.Between(entity.x, entity.y, t.x, t.y);
         return distToDefender < 70 && t.x < entity.x;
       });
       
-      if (blockers.length === 0 || config.skill > 0.7) {
+      const angleToGoal = Math.atan2(goalY - entity.y, goalX - entity.x);
+      const hasGoodAngle = Math.abs(Math.abs(angleToGoal) - Math.PI) < TUNING.AI_SHOOT_ANGLE_THRESHOLD;
+      
+      if ((blockers.length === 0 && hasGoodAngle) || config.skill > 0.7) {
         return { action: 'shoot', targetX: goalX, targetY: goalY, priority: 10 };
       }
     }
     
-    // Check for pressure
-    const nearbyDefenders = [player, ...teammates].filter(t =>
-      Phaser.Math.Distance.Between(entity.x, entity.y, t.x, t.y) < TUNING.AI_PRESSURE_RADIUS
-    );
-    
-    const canPass = !this.isOnPassCooldown(entity);
-    
-    if (nearbyDefenders.length > 0 && canPass && enemies.length > 1) {
-      const passTarget = this.findBestPassTarget(entity, null, enemies.filter(e => e !== entity), [player, ...teammates], false);
+    // === PASS IF TEAMMATE IN BETTER POSITION ===
+    if (canPass && otherEnemies.length > 0) {
+      const passTarget = this.findBestPassTarget(entity, null, otherEnemies, defenders, false);
       if (passTarget) {
-        this.setPassCooldown(entity);
-        return { action: 'pass', targetEntity: passTarget, priority: 8 };
+        // Check if teammate is more dangerous
+        const myDangerScore = this.getEnemyDangerScore(entity, goalX, goalY, defenders);
+        const targetDangerScore = this.getEnemyDangerScore(passTarget, goalX, goalY, defenders);
+        
+        if (targetDangerScore > myDangerScore + 12) {
+          this.setPassCooldown(entity);
+          return { action: 'pass', targetEntity: passTarget, priority: 8 };
+        }
       }
     }
     
-    // Dribble toward goal
-    const moveTarget = this.findDribbleTarget(entity, [player, ...teammates], goalX, goalY);
+    // === SWITCH PLAY - pass to switch sides if blocked ===
+    if (canPass && otherEnemies.length > 0) {
+      // Check if forward path is blocked
+      const forwardBlocked = defenders.some(d => 
+        d.x < entity.x && 
+        Math.abs(d.y - entity.y) < 80 &&
+        Phaser.Math.Distance.Between(entity.x, entity.y, d.x, d.y) < 100
+      );
+      
+      if (forwardBlocked) {
+        // Find a wide teammate
+        const wideTarget = otherEnemies.find(e => 
+          Math.abs(e.y - entity.y) > 100 &&
+          !this.isPassLaneBlocked(entity, e, defenders)
+        );
+        
+        if (wideTarget) {
+          this.setPassCooldown(entity);
+          return { action: 'pass', targetEntity: wideTarget, priority: 7 };
+        }
+      }
+    }
+    
+    // === DRIBBLE TOWARD GOAL ===
+    const moveTarget = this.findDribbleTarget(entity, defenders, goalX, goalY);
     return { action: 'move', targetX: moveTarget.x, targetY: moveTarget.y, priority: 5 };
   }
   
+  /**
+   * Calculate danger score for enemy (toward player goal on left)
+   */
+  private getEnemyDangerScore(entity: any, goalX: number, goalY: number, defenders: any[]): number {
+    const distToGoal = Phaser.Math.Distance.Between(entity.x, entity.y, goalX, goalY);
+    
+    // Distance score (closer = higher)
+    const distScore = (1 - distToGoal / this.fieldWidth) * 50;
+    
+    // Angle score (central = higher)
+    const angleToGoal = Math.atan2(goalY - entity.y, goalX - entity.x);
+    const angleScore = (1 - Math.abs(Math.abs(angleToGoal) - Math.PI) / Math.PI) * 30;
+    
+    // Openness
+    let minDefDist = Infinity;
+    for (const def of defenders) {
+      const d = Phaser.Math.Distance.Between(entity.x, entity.y, def.x, def.y);
+      if (d < minDefDist) minDefDist = d;
+    }
+    const openScore = Math.min(minDefDist / 100, 1) * 20;
+    
+    return distScore + angleScore + openScore;
+  }
+  
+  /**
+   * Enemy off-ball movement when enemy teammate has the ball
+   * Creates passing triangles for enemy team
+   */
   private getEnemySupportDecision(entity: any, ball: any, enemies: any[], config: AIConfig, slotIndex: number): AIDecision {
     const ballCarrier = ball.owner;
-    const supportPos = this.getPassingLanePosition(entity, ballCarrier, config.role, false, []);
-    return { action: 'move', targetX: supportPos.x, targetY: supportPos.y, priority: 6 };
+    const otherEnemies = enemies.filter(e => e !== entity && e !== ballCarrier);
+    
+    // Goal for enemies is on the left (x = 0)
+    const goalX = 0;
+    
+    let targetPos: { x: number; y: number };
+    
+    switch (config.role) {
+      case 'forward':
+        // Make a run toward player goal
+        targetPos = {
+          x: Phaser.Math.Clamp(ballCarrier.x - 100, 100, this.fieldWidth / 2),
+          y: entity.y + (entity.y < this.fieldHeight / 2 ? 40 : -40)
+        };
+        break;
+        
+      case 'midfielder':
+        // Triangle support for enemy team
+        targetPos = this.getTriangleSupportPosition(entity, ballCarrier, otherEnemies, [], false);
+        break;
+        
+      case 'defender':
+      default:
+        // Stay behind as outlet
+        targetPos = this.getDefensiveSupportPosition(entity, ballCarrier, [], false);
+        break;
+    }
+    
+    // Apply separation
+    targetPos = this.applyTeammateSeparation(targetPos, entity, otherEnemies);
+    
+    return { action: 'move', targetX: targetPos.x, targetY: targetPos.y, priority: 6 };
   }
   
   private getEnemyDefensiveDecision(entity: any, ball: any, player: any, teammates: any[], config: AIConfig, slotIndex: number): AIDecision {
@@ -667,9 +975,17 @@ export class AISystem {
     this.tackleBackoffUntil.set(entity, this.scene.time.now + duration);
   }
   
-  // Find best pass target with lane checking
+  /**
+   * Find best pass target using comprehensive scoring
+   * Includes player priority when calling for pass
+   */
   private findBestPassTarget(entity: any, player: any | null, teammates: any[], enemies: any[], isPlayerTeam: boolean): any {
-    const candidates = player ? [player, ...teammates].filter(t => t !== entity && !t.hasBall) : teammates.filter(t => t !== entity && !t.hasBall);
+    // Build candidate list - include player for player team
+    const candidates = player 
+      ? [player, ...teammates].filter(t => t !== entity && !t.hasBall) 
+      : teammates.filter(t => t !== entity && !t.hasBall);
+    
+    if (candidates.length === 0) return null;
     
     let bestTarget = null;
     let bestScore = -Infinity;
@@ -679,34 +995,76 @@ export class AISystem {
     for (const candidate of candidates) {
       const dist = Phaser.Math.Distance.Between(entity.x, entity.y, candidate.x, candidate.y);
       
+      // Distance bounds
       if (dist < TUNING.AI_PASS_MIN_DIST || dist > TUNING.AI_PASS_MAX_DIST) continue;
       
-      let score = 50;
+      let score = 50;  // Base score
       
-      // Prefer forward passes
-      if (isPlayerTeam) {
-        if (candidate.x > entity.x) score += 25;
+      // === LANE CLEARNESS ===
+      const isLaneBlocked = this.isPassLaneBlocked(entity, candidate, enemies);
+      if (isLaneBlocked) {
+        score -= TUNING.PASS_WEIGHT_LANE * 1.5;  // Heavy penalty for blocked lane
       } else {
-        if (candidate.x < entity.x) score += 25;
+        score += TUNING.PASS_WEIGHT_LANE;  // Bonus for clear lane
       }
       
-      // Closer to goal is better
-      const toGoalDist = Math.abs(targetGoalX - candidate.x);
-      score += (1 - toGoalDist / this.fieldWidth) * 20;
+      // === FORWARD PROGRESS ===
+      if (isPlayerTeam) {
+        if (candidate.x > entity.x) {
+          const progressBonus = (candidate.x - entity.x) / 200;  // More bonus for more progress
+          score += TUNING.PASS_WEIGHT_PROGRESS * (1 + progressBonus);
+        }
+      } else {
+        if (candidate.x < entity.x) {
+          const progressBonus = (entity.x - candidate.x) / 200;
+          score += TUNING.PASS_WEIGHT_PROGRESS * (1 + progressBonus);
+        }
+      }
       
-      // Prefer medium distance passes
-      const idealDist = 140;
-      score -= Math.abs(dist - idealDist) * 0.08;
+      // === RECEIVER OPENNESS (SPACE) ===
+      let minEnemyDist = Infinity;
+      for (const enemy of enemies) {
+        const enemyDist = Phaser.Math.Distance.Between(candidate.x, candidate.y, enemy.x, enemy.y);
+        if (enemyDist < minEnemyDist) minEnemyDist = enemyDist;
+      }
       
-      // Check if lane is blocked
-      const isLaneBlocked = this.isPassLaneBlocked(entity, candidate, enemies);
-      if (isLaneBlocked) score -= 45;
+      if (minEnemyDist > 80) {
+        score += TUNING.PASS_WEIGHT_SPACE;  // Very open
+      } else if (minEnemyDist > 50) {
+        score += TUNING.PASS_WEIGHT_SPACE * 0.6;  // Fairly open
+      } else if (minEnemyDist < 30) {
+        score -= TUNING.PASS_WEIGHT_SPACE;  // Heavily marked
+      }
       
-      // Penalize if enemy nearby candidate
-      const nearbyEnemies = enemies.filter(e =>
-        Phaser.Math.Distance.Between(candidate.x, candidate.y, e.x, e.y) < 55
-      );
-      score -= nearbyEnemies.length * 18;
+      // === DISTANCE PENALTY ===
+      const distDeviation = Math.abs(dist - TUNING.PASS_IDEAL_DISTANCE);
+      score -= (distDeviation / 100) * TUNING.PASS_WEIGHT_DISTANCE;
+      
+      // === PLAYER CALLING FOR PASS BONUS ===
+      if (isPlayerTeam && candidate === player && player.isCallingForPass) {
+        score += TUNING.PASS_PLAYER_CALL_BONUS;
+      }
+      
+      // === PLAYER IN GOOD POSITION BONUS (even without calling) ===
+      if (isPlayerTeam && candidate === player && !isLaneBlocked) {
+        // Slight bonus for passing to player when open
+        if (minEnemyDist > 60) {
+          score += 10;
+        }
+      }
+      
+      // === OBJECTIVE-BASED ADJUSTMENTS ===
+      if (this.currentObjective.type === 'hold_possession') {
+        // Prefer safer, backward passes
+        if (isPlayerTeam && candidate.x < entity.x) {
+          score += 15;  // Backward pass bonus
+        }
+      } else if (this.currentObjective.type === 'score' && this.currentObjective.urgency > 0.5) {
+        // More aggressive forward passes
+        if (isPlayerTeam && candidate.x > entity.x + 50) {
+          score += 12;
+        }
+      }
       
       if (score > bestScore) {
         bestScore = score;
@@ -714,7 +1072,7 @@ export class AISystem {
       }
     }
     
-    return bestScore > 25 ? bestTarget : null;
+    return bestScore > TUNING.PASS_SCORE_THRESHOLD ? bestTarget : null;
   }
   
   // Check if pass lane is blocked
