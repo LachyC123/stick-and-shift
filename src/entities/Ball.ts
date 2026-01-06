@@ -22,6 +22,13 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   // Possession tracking for steal detection
   public lastPossessingTeam: PossessionTeam = 'none';
   
+  // Shot origin tracking (for D-circle scoring rule)
+  public lastShotTeam: PossessionTeam = 'none';
+  public lastShotFromInsideD: boolean = false;
+  public lastShotTime: number = 0;
+  public lastShotX: number = 0;
+  public lastShotY: number = 0;
+  
   // Pass targeting for assist logic
   public intendedReceiver: any = null;
   public passStartTime: number = 0;
@@ -287,6 +294,39 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     this.kick(direction, power, spin, 'shot');
   }
   
+  /**
+   * Record shot origin for D-circle scoring validation
+   * Called by RunScene when any shot is taken
+   */
+  recordShotOrigin(shooterX: number, shooterY: number, team: PossessionTeam, isInsideD: boolean): void {
+    this.lastShotTeam = team;
+    this.lastShotFromInsideD = isInsideD;
+    this.lastShotTime = this.scene.time.now;
+    this.lastShotX = shooterX;
+    this.lastShotY = shooterY;
+    
+    // Debug log
+    console.log(`[SHOT_ORIGIN] Team: ${team}, InD: ${isInsideD}, Pos: (${Math.round(shooterX)}, ${Math.round(shooterY)})`);
+  }
+  
+  /**
+   * Check if the last shot was recent enough to count for a goal
+   */
+  isLastShotRecent(): boolean {
+    return this.scene.time.now - this.lastShotTime < TUNING.SHOT_TO_GOAL_MAX_MS;
+  }
+  
+  /**
+   * Clear shot origin (e.g., after goal or reset)
+   */
+  clearShotOrigin(): void {
+    this.lastShotTeam = 'none';
+    this.lastShotFromInsideD = false;
+    this.lastShotTime = 0;
+    this.lastShotX = 0;
+    this.lastShotY = 0;
+  }
+  
   // Pass the ball (uses kick internally)
   pass(power: number, angle: number, passer: any, intendedReceiver?: any): void {
     this.owner = null;
@@ -450,6 +490,9 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     // Reset possession tracking (ball is neutral until kickoff)
     this.lastPossessingTeam = 'none';
+    
+    // Clear shot origin tracking
+    this.clearShotOrigin();
     
     // Clear trail
     this.trailPoints = [];

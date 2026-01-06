@@ -132,16 +132,18 @@ export const AI_PRESS_DISTANCE = 450;
 export const AI_SECOND_PRESSER_RADIUS = 380;
 /** Distance at which AI attempts tackle */
 export const AI_TACKLE_DISTANCE = 70;
-/** Tackle range for AI (larger = more aggressive) */
-export const AI_TACKLE_RANGE = 72;
+/** Tackle range for AI - AI-DEFENSE v3 (larger = more aggressive) */
+export const AI_TACKLE_RANGE = 75;
 /** Minimum angle alignment for tackle (cos value, lower = more permissive) */
 export const AI_TACKLE_ANGLE_COS = 0.1;
-/** AI tackle cooldown (lower = more frequent tackles) */
-export const AI_TACKLE_COOLDOWN_MS = 550;
-/** Tackle willingness (0-1) - chance to attempt when conditions are good */
-export const AI_TACKLE_WILLINGNESS = 0.92;
+/** AI tackle cooldown - AI-DEFENSE v3 (lower = more frequent tackles) */
+export const AI_TACKLE_COOLDOWN_MS = 600;
+/** Tackle willingness - AI-DEFENSE v3 (1.0 = always attempt when in range) */
+export const AI_TACKLE_WILLINGNESS = 1.0;
 /** Back-off time after failed tackle (ms) */
 export const AI_TACKLE_BACKOFF_MS = 200;
+/** Close range multiplier for tackle (if within this % of range, ignore angle) */
+export const AI_TACKLE_CLOSE_RANGE_MULT = 0.65;
 
 /** Base AI aggression (0-1) */
 export const AI_AGGRESSION = 0.80;
@@ -198,6 +200,46 @@ export const GOAL_MOUTH_HEIGHT = 120;
 export const GOAL_SENSOR_DEPTH = 24;
 /** D-circle (shooting circle) radius */
 export const D_CIRCLE_RADIUS = 150;
+
+// ============================================================
+// HOCKEY SCORING RULES (D-CIRCLE REQUIREMENT)
+// ============================================================
+
+/** Max time between shot and goal for shot to count (ms) */
+export const SHOT_TO_GOAL_MAX_MS = 4000;
+/** Require shot from inside D to score (hockey rule) */
+export const REQUIRE_SHOT_FROM_D = true;
+
+// ============================================================
+// ENEMY GOALKEEPER
+// ============================================================
+
+/** GK position - min X (near goal line) */
+export const GK_MIN_X = 30;
+/** GK position - max X (how far out GK can come) */
+export const GK_MAX_X = 90;
+/** GK position - top boundary relative to goal center */
+export const GK_Y_MARGIN = 70;
+/** GK base movement speed */
+export const GK_SPEED = 220;
+/** GK lunge speed (when diving for save) */
+export const GK_LUNGE_SPEED = 400;
+/** GK lunge duration (ms) */
+export const GK_LUNGE_DURATION = 280;
+/** GK lunge cooldown (ms) */
+export const GK_LUNGE_COOLDOWN = 800;
+/** GK reaction time (ms delay before responding to shot) */
+export const GK_REACTION_MS = 80;
+/** GK block/collision radius */
+export const GK_BLOCK_RADIUS = 28;
+/** Ball speed threshold to trigger GK lunge */
+export const GK_LUNGE_SPEED_THRESHOLD = 200;
+/** Prediction lookahead multiplier for GK positioning */
+export const GK_PREDICT_MULT = 0.22;
+/** Deflection speed multiplier when GK blocks */
+export const GK_DEFLECT_SPEED = 300;
+/** GK enabled flag */
+export const GK_ENABLED = true;
 
 // ============================================================
 // HEALTH SYSTEM
