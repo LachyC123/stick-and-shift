@@ -1,0 +1,28 @@
+{
+  "name": "stick-and-shift",
+  "version": "1.0.0",
+  "description": "Stick & Shift - A Field Hockey Roguelike Game",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && gh-pages -d dist"
+  },
+  "keywords": [
+    "phaser",
+    "game",
+    "field-hockey",
+    "roguelike",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "phaser": "^3.70.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10"
+  }
+}
