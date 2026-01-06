@@ -125,23 +125,23 @@ export const AI_MAX_CHASERS = 2;
 export const AI_MAX_PRESSERS = 2;
 
 /** AI reaction time in ms (lower = faster reactions) */
-export const AI_REACTION_MS = 140;
+export const AI_REACTION_MS = 120;
 /** Distance at which AI starts pressing the ball carrier */
-export const AI_PRESS_DISTANCE = 340;
-/** Secondary presser radius */
-export const AI_SECOND_PRESSER_RADIUS = 260;
+export const AI_PRESS_DISTANCE = 450;
+/** Secondary presser radius (larger = more aggressive trap) */
+export const AI_SECOND_PRESSER_RADIUS = 380;
 /** Distance at which AI attempts tackle */
-export const AI_TACKLE_DISTANCE = 58;
-/** Tackle range for AI */
-export const AI_TACKLE_RANGE = 58;
-/** Minimum angle alignment for tackle (cos value, 0.2 = ~78 degrees) */
-export const AI_TACKLE_ANGLE_COS = 0.15;
-/** AI tackle cooldown */
-export const AI_TACKLE_COOLDOWN_MS = 650;
+export const AI_TACKLE_DISTANCE = 70;
+/** Tackle range for AI (larger = more aggressive) */
+export const AI_TACKLE_RANGE = 72;
+/** Minimum angle alignment for tackle (cos value, lower = more permissive) */
+export const AI_TACKLE_ANGLE_COS = 0.1;
+/** AI tackle cooldown (lower = more frequent tackles) */
+export const AI_TACKLE_COOLDOWN_MS = 550;
 /** Tackle willingness (0-1) - chance to attempt when conditions are good */
-export const AI_TACKLE_WILLINGNESS = 0.85;
+export const AI_TACKLE_WILLINGNESS = 0.92;
 /** Back-off time after failed tackle (ms) */
-export const AI_TACKLE_BACKOFF_MS = 250;
+export const AI_TACKLE_BACKOFF_MS = 200;
 
 /** Base AI aggression (0-1) */
 export const AI_AGGRESSION = 0.80;

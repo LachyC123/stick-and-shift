@@ -7,16 +7,22 @@ import { AISystem, AIConfig, AIDecision, AIRole } from '../systems/AISystem';
 export class TeammateAI extends Phaser.Physics.Arcade.Sprite {
   // AI
   public aiConfig: AIConfig;
-  public aiSystem: AISystem;
+  public aiSystem!: AISystem;  // Will be set externally from RunScene
   private currentDecision?: AIDecision;
   private decisionTimer: number = 0;
+  
+  // Stuck detection
+  private lastPosition: { x: number; y: number } = { x: 0, y: 0 };
+  private stuckTime: number = 0;
+  private readonly STUCK_THRESHOLD_MS = 600;
+  private readonly STUCK_SPEED_THRESHOLD = 5;
   
   // State
   public hasBall: boolean = false;
   public isStunned: boolean = false;
   
   // Stats
-  private speed: number = 180;
+  public speed: number = 180;
   private tackleRange: number = 40;
   private passRange: number = 300;
   
@@ -34,7 +40,7 @@ export class TeammateAI extends Phaser.Physics.Arcade.Sprite {
   public onPass?: (angle: number, target: any) => void;
   public onTackle?: (target: any) => void;
   
-  constructor(scene: Phaser.Scene, x: number, y: number, role: AIRole, colorIndex: number = 0) {
+  constructor(scene: Phaser.Scene, x: number, y: number, role: AIRole, colorIndex: number = 0, sharedAISystem?: AISystem) {
     super(scene, x, y, `player_${colorIndex}`);
     
     // Create AI config based on role
@@ -49,7 +55,12 @@ export class TeammateAI extends Phaser.Physics.Arcade.Sprite {
         this.aiConfig = AISystem.createMidfielderConfig(0.5);
     }
     
-    this.aiSystem = new AISystem(scene);
+    // Use shared AISystem if provided, otherwise create local one
+    this.aiSystem = sharedAISystem || new AISystem(scene);
+    
+    // Initialize stuck detection
+    this.lastPosition = { x, y };
+    this.stuckTime = 0;
     
     // Add to scene
     scene.add.existing(this);
@@ -69,6 +80,23 @@ export class TeammateAI extends Phaser.Physics.Arcade.Sprite {
       this.setVelocity(this.body!.velocity.x * 0.9, this.body!.velocity.y * 0.9);
       return;
     }
+    
+    // Stuck detection - if AI is barely moving for too long, force new decision
+    const speed = Math.sqrt(this.body!.velocity.x ** 2 + this.body!.velocity.y ** 2);
+    const distMoved = Phaser.Math.Distance.Between(this.x, this.y, this.lastPosition.x, this.lastPosition.y);
+    
+    if (speed < this.STUCK_SPEED_THRESHOLD && distMoved < 3) {
+      this.stuckTime += delta;
+      if (this.stuckTime > this.STUCK_THRESHOLD_MS) {
+        // Force a new decision immediately
+        this.decisionTimer = 0;
+        this.stuckTime = 0;
+        this.currentDecision = undefined;  // Clear stale decision
+      }
+    } else {
+      this.stuckTime = 0;
+    }
+    this.lastPosition = { x: this.x, y: this.y };
     
     // Update decision periodically
     this.decisionTimer -= delta;

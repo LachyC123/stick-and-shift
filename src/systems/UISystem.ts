@@ -67,8 +67,14 @@ export class UISystem {
   // Pause menu
   private pauseOverlay?: Phaser.GameObjects.Container;
   
-  // Cup Run display
-  private cupRunText?: Phaser.GameObjects.Text;
+  // Cup Run display (improved card)
+  private cupRunCard?: Phaser.GameObjects.Container;
+  private cupRunBg?: Phaser.GameObjects.Graphics;
+  private cupRunPlayerScore?: Phaser.GameObjects.Text;
+  private cupRunEnemyScore?: Phaser.GameObjects.Text;
+  private cupRunSubtitle?: Phaser.GameObjects.Text;
+  private cupRunTrophy?: Phaser.GameObjects.Text;
+  private cupRunDivider?: Phaser.GameObjects.Text;
   
   // Active curse display
   private curseActiveText?: Phaser.GameObjects.Text;
@@ -135,19 +141,13 @@ export class UISystem {
     });
     this.container.add(this.momentText);
     
-    // Cup Run score (below moment counter)
-    this.cupRunText = this.scene.add.text(20, 45, 'CUP RUN: You 0 — 0 Enemy (First to 5)', {
+    // Cup Run Card (prominent, professional design)
+    this.createCupRunCard();
+    
+    // Active curse indicator (below Cup Run card)
+    this.curseActiveText = this.scene.add.text(20, 110, '', {
       fontFamily: 'Arial, sans-serif',
       fontSize: '14px',
-      color: '#f39c12',
-      fontStyle: 'bold'
-    });
-    this.container.add(this.cupRunText);
-    
-    // Active curse indicator (below Cup Run)
-    this.curseActiveText = this.scene.add.text(20, 68, '', {
-      fontFamily: 'Arial, sans-serif',
-      fontSize: '13px',
       color: '#ff6600',
       fontStyle: 'bold'
     });
@@ -789,20 +789,205 @@ export class UISystem {
     }
   }
   
-  // Update Cup Run score display
+  // Create the Cup Run Card (prominent, professional design)
+  private createCupRunCard(): void {
+    const cardX = 15;
+    const cardY = 42;
+    const cardWidth = 170;
+    const cardHeight = 62;
+    
+    // Container for the card
+    this.cupRunCard = this.scene.add.container(cardX, cardY);
+    this.cupRunCard.setScrollFactor(0);
+    
+    // Background with rounded rectangle and gradient-like effect
+    this.cupRunBg = this.scene.add.graphics();
+    this.drawCupRunCardBg(cardWidth, cardHeight, 0x1a1a2e, 0.92);
+    this.cupRunCard.add(this.cupRunBg);
+    
+    // Trophy icon (using emoji/text)
+    this.cupRunTrophy = this.scene.add.text(12, 10, '🏆', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '22px'
+    });
+    this.cupRunCard.add(this.cupRunTrophy);
+    
+    // Player score (large, bold)
+    this.cupRunPlayerScore = this.scene.add.text(50, 8, '0', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '28px',
+      color: '#2ecc71',
+      fontStyle: 'bold'
+    });
+    this.cupRunCard.add(this.cupRunPlayerScore);
+    
+    // Divider " — "
+    this.cupRunDivider = this.scene.add.text(78, 12, '—', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '22px',
+      color: '#7f8c8d'
+    });
+    this.cupRunCard.add(this.cupRunDivider);
+    
+    // Enemy score (large, bold)
+    this.cupRunEnemyScore = this.scene.add.text(102, 8, '0', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '28px',
+      color: '#e74c3c',
+      fontStyle: 'bold'
+    });
+    this.cupRunCard.add(this.cupRunEnemyScore);
+    
+    // Labels "YOU" and "ENEMY"
+    const youLabel = this.scene.add.text(50, 36, 'YOU', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '10px',
+      color: '#95a5a6',
+      fontStyle: 'bold'
+    });
+    this.cupRunCard.add(youLabel);
+    
+    const enemyLabel = this.scene.add.text(102, 36, 'ENEMY', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '10px',
+      color: '#95a5a6',
+      fontStyle: 'bold'
+    });
+    this.cupRunCard.add(enemyLabel);
+    
+    // Subtitle "CUP RUN • First to 5"
+    this.cupRunSubtitle = this.scene.add.text(cardWidth / 2, 50, 'CUP RUN • First to 5', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '10px',
+      color: '#f39c12'
+    });
+    this.cupRunSubtitle.setOrigin(0.5, 0.5);
+    this.cupRunCard.add(this.cupRunSubtitle);
+    
+    this.container.add(this.cupRunCard);
+  }
+  
+  // Draw the Cup Run card background
+  private drawCupRunCardBg(width: number, height: number, color: number, alpha: number): void {
+    if (!this.cupRunBg) return;
+    
+    this.cupRunBg.clear();
+    
+    // Shadow
+    this.cupRunBg.fillStyle(0x000000, 0.3);
+    this.cupRunBg.fillRoundedRect(3, 3, width, height, 8);
+    
+    // Main background
+    this.cupRunBg.fillStyle(color, alpha);
+    this.cupRunBg.fillRoundedRect(0, 0, width, height, 8);
+    
+    // Border
+    this.cupRunBg.lineStyle(2, 0xf39c12, 0.8);
+    this.cupRunBg.strokeRoundedRect(0, 0, width, height, 8);
+    
+    // Inner glow at top
+    this.cupRunBg.fillStyle(0xffffff, 0.05);
+    this.cupRunBg.fillRoundedRect(2, 2, width - 4, height / 3, 6);
+  }
+  
+  // Update Cup Run score display with animations
   updateCupRun(playerPoints: number, enemyPoints: number, pointsToWin: number = 5): void {
-    if (!this.cupRunText) return;
+    if (!this.cupRunCard || !this.cupRunPlayerScore || !this.cupRunEnemyScore) return;
     
-    this.cupRunText.setText(`CUP RUN: You ${playerPoints} — ${enemyPoints} Enemy (First to ${pointsToWin})`);
+    // Get previous scores for animation
+    const prevPlayerScore = parseInt(this.cupRunPlayerScore.text) || 0;
+    const prevEnemyScore = parseInt(this.cupRunEnemyScore.text) || 0;
     
-    // Color based on who's winning
-    if (playerPoints > enemyPoints) {
-      this.cupRunText.setColor('#2ecc71');  // Green - player ahead
-    } else if (enemyPoints > playerPoints) {
-      this.cupRunText.setColor('#e74c3c');  // Red - enemy ahead
-    } else {
-      this.cupRunText.setColor('#f39c12');  // Orange - tied
+    // Update text
+    this.cupRunPlayerScore.setText(playerPoints.toString());
+    this.cupRunEnemyScore.setText(enemyPoints.toString());
+    
+    // Update subtitle
+    if (this.cupRunSubtitle) {
+      this.cupRunSubtitle.setText(`CUP RUN • First to ${pointsToWin}`);
     }
+    
+    // Update colors based on who's winning
+    if (playerPoints > enemyPoints) {
+      this.cupRunPlayerScore.setColor('#2ecc71');
+      this.cupRunEnemyScore.setColor('#95a5a6');
+    } else if (enemyPoints > playerPoints) {
+      this.cupRunPlayerScore.setColor('#95a5a6');
+      this.cupRunEnemyScore.setColor('#e74c3c');
+    } else {
+      this.cupRunPlayerScore.setColor('#f1c40f');
+      this.cupRunEnemyScore.setColor('#f1c40f');
+    }
+    
+    // Animate if score changed
+    if (playerPoints !== prevPlayerScore || enemyPoints !== prevEnemyScore) {
+      this.animateCupRunScoreChange(playerPoints > prevPlayerScore, enemyPoints > prevEnemyScore);
+    }
+  }
+  
+  // Animate the Cup Run card when score changes
+  private animateCupRunScoreChange(playerScored: boolean, enemyScored: boolean): void {
+    if (!this.cupRunCard) return;
+    
+    // Pulse the card
+    this.scene.tweens.add({
+      targets: this.cupRunCard,
+      scaleX: 1.08,
+      scaleY: 1.08,
+      duration: 100,
+      yoyo: true,
+      ease: 'Quad.easeOut'
+    });
+    
+    // Flash the scorer's number
+    if (playerScored && this.cupRunPlayerScore) {
+      this.scene.tweens.add({
+        targets: this.cupRunPlayerScore,
+        scale: 1.3,
+        duration: 150,
+        yoyo: true,
+        ease: 'Bounce.easeOut'
+      });
+      // Flash glow effect
+      this.flashCupRunSide('player');
+    }
+    
+    if (enemyScored && this.cupRunEnemyScore) {
+      this.scene.tweens.add({
+        targets: this.cupRunEnemyScore,
+        scale: 1.3,
+        duration: 150,
+        yoyo: true,
+        ease: 'Bounce.easeOut'
+      });
+      this.flashCupRunSide('enemy');
+    }
+  }
+  
+  // Flash effect on the card side that scored
+  private flashCupRunSide(side: 'player' | 'enemy'): void {
+    if (!this.cupRunBg) return;
+    
+    const flashGraphics = this.scene.add.graphics();
+    const x = side === 'player' ? 0 : 85;
+    const color = side === 'player' ? 0x2ecc71 : 0xe74c3c;
+    
+    flashGraphics.fillStyle(color, 0.4);
+    flashGraphics.fillRoundedRect(x, 0, 85, 62, side === 'player' ? { tl: 8, bl: 8, tr: 0, br: 0 } : { tl: 0, bl: 0, tr: 8, br: 8 });
+    
+    if (this.cupRunCard) {
+      this.cupRunCard.add(flashGraphics);
+      this.cupRunCard.sendToBack(flashGraphics);
+      this.cupRunCard.sendToBack(this.cupRunBg);
+    }
+    
+    this.scene.tweens.add({
+      targets: flashGraphics,
+      alpha: 0,
+      duration: 400,
+      ease: 'Quad.easeOut',
+      onComplete: () => flashGraphics.destroy()
+    });
   }
   
   // Set active curse display
