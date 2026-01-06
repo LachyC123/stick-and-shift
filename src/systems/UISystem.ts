@@ -70,6 +70,14 @@ export class UISystem {
   // Cup Run display
   private cupRunText?: Phaser.GameObjects.Text;
   
+  // Active curse display
+  private curseActiveText?: Phaser.GameObjects.Text;
+  private activeCurseName: string | null = null;
+  
+  // Debug overlay
+  private debugOverlay?: Phaser.GameObjects.Container;
+  private debugVisible: boolean = false;
+  
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
     this.container = scene.add.container(0, 0);
@@ -128,13 +136,23 @@ export class UISystem {
     this.container.add(this.momentText);
     
     // Cup Run score (below moment counter)
-    this.cupRunText = this.scene.add.text(20, 45, 'Cup: You 0 - 0 Enemy (First to 5)', {
+    this.cupRunText = this.scene.add.text(20, 45, 'CUP RUN: You 0 — 0 Enemy (First to 5)', {
       fontFamily: 'Arial, sans-serif',
       fontSize: '14px',
       color: '#f39c12',
       fontStyle: 'bold'
     });
     this.container.add(this.cupRunText);
+    
+    // Active curse indicator (below Cup Run)
+    this.curseActiveText = this.scene.add.text(20, 68, '', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '13px',
+      color: '#ff6600',
+      fontStyle: 'bold'
+    });
+    this.curseActiveText.setVisible(false);
+    this.container.add(this.curseActiveText);
     
     // Possession indicator (top right)
     this.possessionIndicator = this.scene.add.graphics();
@@ -775,7 +793,7 @@ export class UISystem {
   updateCupRun(playerPoints: number, enemyPoints: number, pointsToWin: number = 5): void {
     if (!this.cupRunText) return;
     
-    this.cupRunText.setText(`Cup: You ${playerPoints} - ${enemyPoints} Enemy (First to ${pointsToWin})`);
+    this.cupRunText.setText(`CUP RUN: You ${playerPoints} — ${enemyPoints} Enemy (First to ${pointsToWin})`);
     
     // Color based on who's winning
     if (playerPoints > enemyPoints) {
@@ -785,6 +803,24 @@ export class UISystem {
     } else {
       this.cupRunText.setColor('#f39c12');  // Orange - tied
     }
+  }
+  
+  // Set active curse display
+  setActiveCurse(curseName: string | null): void {
+    this.activeCurseName = curseName;
+    if (!this.curseActiveText) return;
+    
+    if (curseName) {
+      this.curseActiveText.setText(`⚡ CURSE ACTIVE: ${curseName}`);
+      this.curseActiveText.setVisible(true);
+    } else {
+      this.curseActiveText.setVisible(false);
+    }
+  }
+  
+  // Get active curse name
+  getActiveCurseName(): string | null {
+    return this.activeCurseName;
   }
   
   // Update possession indicator
