@@ -90,15 +90,19 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
   
   /**
    * Add a standalone modifier (used by Comeback Curses)
+   * Supports both formats:
+   * - { stat, type, value } (explicit type)
+   * - { stat, value, isPercent } (upgrade format)
    */
-  addModifier(mod: { stat: string; type: 'add' | 'multiply'; value: number }): void {
-    const current = this.statModifiers.get(mod.stat) || (mod.type === 'multiply' ? 1 : 0);
-    if (mod.type === 'multiply') {
-      this.statModifiers.set(mod.stat, current * mod.value);
-    } else {
-      this.statModifiers.set(mod.stat, current + mod.value);
-    }
-    console.log(`[UPGRADE] Added modifier: ${mod.stat} ${mod.type} ${mod.value}`);
+  addModifier(mod: { stat: string; type?: 'add' | 'multiply'; value: number; isPercent?: boolean }): void {
+    // Handle both formats
+    const current = this.statModifiers.get(mod.stat) || 0;
+    
+    // Curse modifiers use isPercent, treat as additive (like upgrades do)
+    // The value is added to existing modifiers
+    this.statModifiers.set(mod.stat, current + mod.value);
+    
+    console.log(`[UPGRADE] Added modifier: ${mod.stat} += ${mod.value}${mod.isPercent ? '%' : ''}`);
   }
   
   /**

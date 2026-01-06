@@ -129,6 +129,11 @@ export class RunScene extends Phaser.Scene {
     // Start the run
     this.momentSystem.startRun(10);
     
+    // Initialize Cup Run HUD display
+    const cupState = this.momentSystem.getCupState();
+    this.uiSystem.updateCupRun(cupState.playerPoints, cupState.enemyPoints, cupState.pointsToWin);
+    console.log('[CUP_RUN_START] Initialized: First to 5');
+    
     // Check for first-run tutorial
     const saveSystem = SaveSystem.getInstance();
     const hasSeenTutorial = saveSystem.getStat('hasSeenTutorial');
@@ -424,9 +429,65 @@ export class RunScene extends Phaser.Scene {
         console.log('========================');
       }
     });
+    
+    // F8 toggles upgrade debug overlay
+    this.input.keyboard?.on('keydown-F8', () => {
+      this.debugUpgrades = !this.debugUpgrades;
+      this.toastManager.info(
+        this.debugUpgrades ? 'Upgrade debug: ON' : 'Upgrade debug: OFF',
+        'Debug'
+      );
+      this.updateUpgradeDebugOverlay();
+    });
   }
   
   private debugStealMoment: boolean = false;
+  private debugUpgrades: boolean = false;
+  private upgradeDebugText?: Phaser.GameObjects.Text;
+  
+  private updateUpgradeDebugOverlay(): void {
+    if (!this.debugUpgrades) {
+      this.upgradeDebugText?.setVisible(false);
+      return;
+    }
+    
+    if (!this.upgradeDebugText) {
+      this.upgradeDebugText = this.add.text(this.cameras.main.width - 10, 80, '', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#00ff00',
+        backgroundColor: '#000000cc',
+        padding: { x: 8, y: 6 }
+      });
+      this.upgradeDebugText.setOrigin(1, 0);
+      this.upgradeDebugText.setScrollFactor(0);
+      this.upgradeDebugText.setDepth(500);
+    }
+    
+    const upgrades = this.upgradeSystem.getOwnedUpgrades();
+    const cupState = this.momentSystem.getCupState();
+    const curseName = this.uiSystem.getActiveCurseName();
+    
+    const lines = [
+      '=== UPGRADE DEBUG (F8) ===',
+      `Active Upgrades: ${upgrades.length}`,
+      ...upgrades.slice(0, 8).map(u => `  • ${u.name}`),
+      upgrades.length > 8 ? `  ... +${upgrades.length - 8} more` : '',
+      '',
+      '=== CUP RUN ===',
+      `Score: You ${cupState.playerPoints} - ${cupState.enemyPoints} Enemy`,
+      `Ended: ${cupState.isEnded}`,
+      `Winner: ${cupState.winner || 'none'}`,
+      '',
+      '=== CURSES ===',
+      `Triggered: ${cupState.comebackCursesTriggered}`,
+      `Active: ${curseName || 'none'}`,
+      `Curse ID: ${cupState.activeCurseId || 'none'}`,
+    ];
+    
+    this.upgradeDebugText.setText(lines.filter(l => l).join('\n'));
+    this.upgradeDebugText.setVisible(true);
+  }
   
   private updateDebugDisplay(): void {
     if (!this.debugDisplayEnabled) {
@@ -1438,14 +1499,27 @@ export class RunScene extends Phaser.Scene {
   private handleMomentComplete(data: any): void {
     this.isTransitioning = true;
     
+    // === DEV LOGGING ===
+    console.log(`[MOMENT_RESULT] ${data.isWon ? 'WIN' : 'FAIL'}`);
+    
+    const cupState = data.cupState;
+    if (cupState) {
+      console.log(`[CUP_SCORE] You ${cupState.playerPoints} - ${cupState.enemyPoints} Enemy`);
+      if (cupState.isEnded) {
+        console.log(`[CUP_ENDED] Winner: ${cupState.winner}`);
+      }
+      if (data.shouldTriggerComebackCurses) {
+        console.log(`[COMEBACK_CURSES_TRIGGERED] Deficit: ${cupState.enemyPoints - cupState.playerPoints}`);
+      }
+    }
+    
     this.momentStats.totalTime = data.isWon
       ? (this.momentSystem.getCurrentMoment()?.duration || 45)
       : (this.momentSystem.getCurrentMoment()?.duration || 45) - (this.momentSystem.getCurrentState()?.timeRemaining || 0);
     
-    // Show Cup Run score update
-    const cupState = data.cupState;
+    // Show Cup Run score update in HUD immediately
     if (cupState) {
-      this.toastManager.info(`Cup: You ${cupState.playerPoints} - ${cupState.enemyPoints} Enemy`, 'First to 5');
+      this.uiSystem.updateCupRun(cupState.playerPoints, cupState.enemyPoints, cupState.pointsToWin);
     }
     
     this.uiSystem.showMomentComplete(data.isWon);
@@ -1592,9 +1666,14 @@ export class RunScene extends Phaser.Scene {
         });
         
         container.on('pointerdown', () => {
+          console.log(`[CURSE_PICKED] ${curse.id} - ${curse.name}`);
+          
           // Apply the curse
           this.momentSystem.setActiveCurse(curse.id);
           this.applyCurse(curse);
+          
+          // Update UI to show active curse
+          this.uiSystem.setActiveCurse(curse.name);
           
           // Cleanup
           overlay.destroy();
@@ -1603,7 +1682,7 @@ export class RunScene extends Phaser.Scene {
           cards.forEach(c => c.destroy());
           
           // Show toast
-          this.toastManager.info(`Curse Active: ${curse.name}`, curse.icon);
+          this.toastManager.success(`Comeback Curse: ${curse.name}`, curse.icon);
           this.audioSystem.playUpgrade();
           
           onComplete();
@@ -1645,9 +1724,17 @@ export class RunScene extends Phaser.Scene {
       extraChoices,
       rerolls,
       onSelect: (upgrade) => {
+        console.log(`[UPGRADE_PICKED] ${upgrade.id} - ${upgrade.name}`);
+        console.log(`[UPGRADE_PICKED] Modifiers:`, upgrade.modifiers);
+        console.log(`[UPGRADE_PICKED] Hooks:`, upgrade.hooks);
+        
         this.upgradeSystem.addUpgrade(upgrade);
         this.audioSystem.playUpgrade();
-        this.toastManager.success(`${upgrade.name}`, upgrade.icon);
+        this.toastManager.success(`UPGRADE: ${upgrade.name}`, upgrade.icon);
+        
+        // Log active upgrades count
+        const count = this.upgradeSystem.getOwnedUpgrades().length;
+        console.log(`[UPGRADE_PICKED] Total active upgrades: ${count}`);
         
         this.time.delayedCall(500, () => {
           this.startMoment();
@@ -1660,6 +1747,11 @@ export class RunScene extends Phaser.Scene {
   }
   
   private endRun(data: any): void {
+    const cupState = this.momentSystem.getCupState();
+    const curseName = this.uiSystem.getActiveCurseName();
+    
+    console.log(`[RUN_END] Cup: ${cupState.playerPoints} - ${cupState.enemyPoints}, Winner: ${cupState.winner}`);
+    
     this.time.delayedCall(1000, () => {
       this.cameras.main.fadeOut(500);
       this.cameras.main.once('camerafadeoutcomplete', () => {
@@ -1668,7 +1760,13 @@ export class RunScene extends Phaser.Scene {
           reward: data.reward,
           breakdown: data.breakdown,
           upgrades: this.upgradeSystem.getOwnedUpgrades(),
-          character: this.character
+          character: this.character,
+          cupRun: {
+            playerPoints: cupState.playerPoints,
+            enemyPoints: cupState.enemyPoints,
+            winner: cupState.winner
+          },
+          activeCurse: curseName
         });
       });
     });
@@ -1714,6 +1812,11 @@ export class RunScene extends Phaser.Scene {
     // Update debug display if enabled
     if (this.debugDisplayEnabled) {
       this.updateDebugDisplay();
+    }
+    
+    // Update upgrade debug overlay if enabled
+    if (this.debugUpgrades) {
+      this.updateUpgradeDebugOverlay();
     }
     
     // Update teammates

@@ -29,6 +29,12 @@ interface EndRunData {
   };
   upgrades: Upgrade[];
   character: Character;
+  cupRun?: {
+    playerPoints: number;
+    enemyPoints: number;
+    winner: 'player' | 'enemy' | null;
+  };
+  activeCurse?: string;
 }
 
 export class EndRunScene extends Phaser.Scene {
@@ -81,9 +87,20 @@ export class EndRunScene extends Phaser.Scene {
   private createTitle(isSuccess: boolean): void {
     const centerX = this.cameras.main.centerX;
     
-    // Result title
-    const titleText = isSuccess ? '🏆 RUN COMPLETE!' : '💔 RUN OVER';
-    const titleColor = isSuccess ? '#f1c40f' : '#e74c3c';
+    // Result title - use Cup Run result if available
+    let titleText = isSuccess ? '🏆 RUN COMPLETE!' : '💔 RUN OVER';
+    let titleColor = isSuccess ? '#f1c40f' : '#e74c3c';
+    
+    if (this.runData.cupRun) {
+      const cup = this.runData.cupRun;
+      if (cup.winner === 'player') {
+        titleText = '🏆 CUP VICTORY! 🏆';
+        titleColor = '#f1c40f';
+      } else {
+        titleText = '💔 CUP DEFEAT';
+        titleColor = '#e74c3c';
+      }
+    }
     
     const title = this.add.text(centerX, 50, titleText, {
       fontFamily: 'Arial, sans-serif',
@@ -95,13 +112,37 @@ export class EndRunScene extends Phaser.Scene {
     });
     title.setOrigin(0.5);
     
+    // Cup Run score (if available)
+    let yOffset = 90;
+    if (this.runData.cupRun) {
+      const cup = this.runData.cupRun;
+      const cupScore = this.add.text(centerX, yOffset, `Final Score: You ${cup.playerPoints} — ${cup.enemyPoints} Enemy`, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '24px',
+        color: cup.winner === 'player' ? '#2ecc71' : '#e74c3c',
+        fontStyle: 'bold'
+      });
+      cupScore.setOrigin(0.5);
+      yOffset += 35;
+    }
+    
     // Character info
-    const charInfo = this.add.text(centerX, 95, `Played as ${this.runData.character.name}`, {
+    const charInfo = this.add.text(centerX, yOffset, `Played as ${this.runData.character.name}`, {
       fontFamily: 'Arial, sans-serif',
       fontSize: '18px',
       color: '#bdc3c7'
     });
     charInfo.setOrigin(0.5);
+    
+    // Active curse (if any)
+    if (this.runData.activeCurse) {
+      const curseInfo = this.add.text(centerX, yOffset + 25, `⚡ Curse Used: ${this.runData.activeCurse}`, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: '#ff6600'
+      });
+      curseInfo.setOrigin(0.5);
+    }
     
     // Animate title
     this.tweens.add({
