@@ -1,6 +1,6 @@
 // RunScene for Stick & Shift
 // Main gameplay scene with field hockey action
-// Improved: goal sensors, instant shooting, AI tactics, radar, controls
+// Improved: reliable goal detection, tuning constants, proc feedback
 
 import Phaser from 'phaser';
 import { Character } from '../data/characters';
@@ -19,6 +19,7 @@ import { TrailManager } from '../entities/TrailSegment';
 import { UpgradeDraftOverlay } from '../ui/UpgradeDraftOverlay';
 import { ToastManager } from '../ui/Toast';
 import { SaveSystem } from '../systems/SaveSystem';
+import * as TUNING from '../data/tuning';
 
 interface RunSceneData {
   character: Character;
@@ -49,15 +50,20 @@ export class RunScene extends Phaser.Scene {
   private fieldWidth = 1200;
   private fieldHeight = 700;
   private goalWidth = 40;
-  private goalHeight = 120;
+  private goalHeight = TUNING.GOAL_MOUTH_HEIGHT;
   
-  // Goal sensors (improved detection)
+  // Goal sensors (robust detection)
   private leftGoalSensor!: Phaser.GameObjects.Zone;
   private rightGoalSensor!: Phaser.GameObjects.Zone;
   private leftNetZone!: Phaser.GameObjects.Zone;
   private rightNetZone!: Phaser.GameObjects.Zone;
   private leftGoalGraphics!: Phaser.GameObjects.Graphics;
   private rightGoalGraphics!: Phaser.GameObjects.Graphics;
+  
+  // Goal detection
+  private goalCooldownUntil: number = 0;
+  private debugGoalSensors: boolean = false;
+  private goalSensorDebugGraphics?: Phaser.GameObjects.Graphics;
   
   // State
   private isPaused = false;
@@ -111,6 +117,9 @@ export class RunScene extends Phaser.Scene {
     // Setup event listeners
     this.setupEventListeners();
     
+    // Setup keyboard for debug
+    this.setupDebugKeys();
+    
     // Create UI
     this.uiSystem.createGameHUD();
     
@@ -118,7 +127,7 @@ export class RunScene extends Phaser.Scene {
     this.particleManager.init();
     
     // Start the run
-    this.momentSystem.startRun(10);  // 10 moments
+    this.momentSystem.startRun(10);
     
     // Check for first-run tutorial
     const saveSystem = SaveSystem.getInstance();
@@ -130,7 +139,6 @@ export class RunScene extends Phaser.Scene {
         this.startMoment();
       });
     } else {
-      // Start first moment after brief delay
       this.time.delayedCall(500, () => {
         this.startMoment();
       });
@@ -159,7 +167,6 @@ export class RunScene extends Phaser.Scene {
     this.trailManager = new TrailManager(this);
     this.toastManager = new ToastManager(this);
     
-    // Make systems accessible
     (this as any).audioSystem = this.audioSystem;
     (this as any).inputSystem = this.inputSystem;
   }
@@ -195,7 +202,7 @@ export class RunScene extends Phaser.Scene {
     // Center circle
     lineGraphics.strokeCircle(this.fieldWidth / 2, this.fieldHeight / 2, 60);
     
-    // 23m lines (simplified)
+    // 23m lines
     lineGraphics.beginPath();
     lineGraphics.moveTo(250, 20);
     lineGraphics.lineTo(250, this.fieldHeight - 20);
@@ -218,14 +225,20 @@ export class RunScene extends Phaser.Scene {
   
   private createGoals(): void {
     const goalY = this.fieldHeight / 2;
+    const sensorDepth = TUNING.GOAL_SENSOR_DEPTH;
     
     // === LEFT GOAL (player defends) ===
-    // Goal sensor - detects actual goals
-    this.leftGoalSensor = this.add.zone(8, goalY, 16, this.goalHeight);
+    // Goal sensor - covers the goal mouth and extends behind goal line
+    this.leftGoalSensor = this.add.zone(
+      sensorDepth / 2,  // Center x at half the sensor depth
+      goalY,
+      sensorDepth,
+      this.goalHeight
+    );
     this.physics.add.existing(this.leftGoalSensor, true);
     
-    // Net zone - behind goal, for bounces
-    this.leftNetZone = this.add.zone(-20, goalY, 30, this.goalHeight + 40);
+    // Net zone - behind goal for bounces
+    this.leftNetZone = this.add.zone(-15, goalY, 30, this.goalHeight + 40);
     this.physics.add.existing(this.leftNetZone, true);
     
     // Visual
@@ -234,16 +247,25 @@ export class RunScene extends Phaser.Scene {
     
     // === RIGHT GOAL (player attacks) ===
     // Goal sensor
-    this.rightGoalSensor = this.add.zone(this.fieldWidth - 8, goalY, 16, this.goalHeight);
+    this.rightGoalSensor = this.add.zone(
+      this.fieldWidth - sensorDepth / 2,
+      goalY,
+      sensorDepth,
+      this.goalHeight
+    );
     this.physics.add.existing(this.rightGoalSensor, true);
     
     // Net zone
-    this.rightNetZone = this.add.zone(this.fieldWidth + 20, goalY, 30, this.goalHeight + 40);
+    this.rightNetZone = this.add.zone(this.fieldWidth + 15, goalY, 30, this.goalHeight + 40);
     this.physics.add.existing(this.rightNetZone, true);
     
     // Visual
     this.rightGoalGraphics = this.add.graphics();
     this.drawGoal(this.rightGoalGraphics, this.fieldWidth - 15, goalY - 60, false);
+    
+    // Debug graphics
+    this.goalSensorDebugGraphics = this.add.graphics();
+    this.goalSensorDebugGraphics.setDepth(100);
   }
   
   private drawGoal(graphics: Phaser.GameObjects.Graphics, x: number, y: number, isLeft: boolean): void {
@@ -251,11 +273,11 @@ export class RunScene extends Phaser.Scene {
     
     // Posts
     graphics.fillStyle(0xffffff, 1);
-    graphics.fillRect(x, y, 4, 120);  // Left post
-    graphics.fillRect(x + 11, y, 4, 120);  // Right post
-    graphics.fillRect(x, y - 4, 15, 4);  // Crossbar
+    graphics.fillRect(x, y, 4, 120);
+    graphics.fillRect(x + 11, y, 4, 120);
+    graphics.fillRect(x, y - 4, 15, 4);
     
-    // Net (backboard area)
+    // Net
     graphics.fillStyle(0x333333, 0.9);
     graphics.fillRect(x, y, 15, 120);
     
@@ -280,12 +302,55 @@ export class RunScene extends Phaser.Scene {
     
     this.tweens.add({
       targets: graphics,
-      x: graphics.x + (isLeft ? -5 : 5),
-      duration: 50,
+      x: graphics.x + (isLeft ? -8 : 8),
+      duration: 40,
       yoyo: true,
-      repeat: 3,
+      repeat: 4,
       ease: 'Sine.easeInOut'
     });
+  }
+  
+  private setupDebugKeys(): void {
+    // G key toggles goal sensor debug view
+    this.input.keyboard?.on('keydown-G', () => {
+      this.debugGoalSensors = !this.debugGoalSensors;
+      this.updateGoalSensorDebug();
+      this.toastManager.info(
+        this.debugGoalSensors ? 'Goal sensors: ON' : 'Goal sensors: OFF',
+        'Debug'
+      );
+    });
+  }
+  
+  private updateGoalSensorDebug(): void {
+    if (!this.goalSensorDebugGraphics) return;
+    
+    this.goalSensorDebugGraphics.clear();
+    
+    if (this.debugGoalSensors) {
+      const goalY = this.fieldHeight / 2;
+      const sensorDepth = TUNING.GOAL_SENSOR_DEPTH;
+      
+      // Left goal sensor
+      this.goalSensorDebugGraphics.lineStyle(3, 0x00ff00, 1);
+      this.goalSensorDebugGraphics.strokeRect(
+        0,
+        goalY - this.goalHeight / 2,
+        sensorDepth,
+        this.goalHeight
+      );
+      
+      // Right goal sensor
+      this.goalSensorDebugGraphics.strokeRect(
+        this.fieldWidth - sensorDepth,
+        goalY - this.goalHeight / 2,
+        sensorDepth,
+        this.goalHeight
+      );
+      
+      // Labels
+      this.goalSensorDebugGraphics.fillStyle(0x00ff00, 1);
+    }
   }
   
   private createEntities(): void {
@@ -296,20 +361,33 @@ export class RunScene extends Phaser.Scene {
     // Player action callbacks
     this.player.onShoot = (power, angle) => {
       this.audioSystem.playShoot();
-      this.ball.shoot(power, angle, this.player);
+      
+      // Use the Ball's kick method with the calculated power
+      const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+      this.ball.kick(direction, power, TUNING.SHOT_SPIN_BASE * (Math.random() - 0.5), 'shot');
+      this.ball.lastShooter = this.player;
+      this.ball.lastOwner = this.player;
+      this.ball.isLoose = true;
+      this.ball.owner = null;
+      
       this.momentStats.shotsTaken++;
       
-      // Check if shot is on target (heading toward goal)
-      const targetGoalX = this.fieldWidth;
+      // Check if shot is on target
       if (Math.cos(angle) > 0.3) {
         this.momentStats.shotsOnTarget++;
       }
     };
     
-    this.player.onPass = (angle) => {
+    this.player.onPass = (angle, passSpeed) => {
       this.audioSystem.playPass();
-      const passPower = this.player.stats.passPower * 25;
-      this.ball.pass(passPower, angle, this.player);
+      
+      // Use the Ball's kick method for pass
+      const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+      this.ball.kick(direction, passSpeed, 0, 'pass');
+      this.ball.lastOwner = this.player;
+      this.ball.isLoose = true;
+      this.ball.owner = null;
+      
       this.momentStats.passesAttempted++;
     };
     
@@ -324,18 +402,17 @@ export class RunScene extends Phaser.Scene {
     };
     
     this.player.onShootFailed = () => {
-      // Show "no possession" feedback
       this.uiSystem.showNoPossessionFeedback();
-      this.audioSystem.playClick();  // Subtle click sound
+      this.audioSystem.playClick();
     };
     
     // Create ball
     this.ball = new Ball(this, this.fieldWidth / 2, this.fieldHeight / 2);
     
-    // Create teammates (will be adjusted per moment)
+    // Create teammates
     this.createTeammates(3);
     
-    // Create enemies (will be adjusted per moment)
+    // Create enemies
     this.createEnemies(3);
     
     // Set entity references
@@ -343,7 +420,6 @@ export class RunScene extends Phaser.Scene {
   }
   
   private createTeammates(count: number): void {
-    // Clear existing
     this.teammates.forEach(t => t.destroy());
     this.teammates = [];
     
@@ -364,12 +440,21 @@ export class RunScene extends Phaser.Scene {
       );
       
       teammate.onShoot = (power, angle) => {
-        this.ball.shoot(power, angle, teammate);
+        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+        this.ball.kick(direction, power, 0, 'shot');
+        this.ball.lastShooter = teammate;
+        this.ball.lastOwner = teammate;
+        this.ball.isLoose = true;
+        this.ball.owner = null;
       };
       
       teammate.onPass = (angle, target) => {
-        const passPower = 200;
-        this.ball.pass(passPower, angle, teammate);
+        const passSpeed = TUNING.PASS_SPEED_BASE + 5 * TUNING.PASS_SPEED_SCALE;
+        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+        this.ball.kick(direction, passSpeed, 0, 'pass');
+        this.ball.lastOwner = teammate;
+        this.ball.isLoose = true;
+        this.ball.owner = null;
       };
       
       teammate.onTackle = (target) => {
@@ -381,7 +466,6 @@ export class RunScene extends Phaser.Scene {
   }
   
   private createEnemies(count: number, hasBoss: boolean = false): void {
-    // Clear existing
     this.enemies.forEach(e => e.destroy());
     this.enemies = [];
     
@@ -409,12 +493,21 @@ export class RunScene extends Phaser.Scene {
       );
       
       enemy.onShoot = (power, angle) => {
-        this.ball.shoot(power, angle, enemy);
+        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+        this.ball.kick(direction, power, 0, 'shot');
+        this.ball.lastShooter = enemy;
+        this.ball.lastOwner = enemy;
+        this.ball.isLoose = true;
+        this.ball.owner = null;
       };
       
       enemy.onPass = (angle, target) => {
-        const passPower = 180;
-        this.ball.pass(passPower, angle, enemy);
+        const passSpeed = TUNING.PASS_SPEED_BASE + 4 * TUNING.PASS_SPEED_SCALE;
+        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+        this.ball.kick(direction, passSpeed, 0, 'pass');
+        this.ball.lastOwner = enemy;
+        this.ball.isLoose = true;
+        this.ball.owner = null;
       };
       
       enemy.onTackle = (target) => {
@@ -426,7 +519,6 @@ export class RunScene extends Phaser.Scene {
   }
   
   private updateEntityReferences(): void {
-    // Update ball references for all entities
     this.teammates.forEach(t => {
       t.setReferences(this.player, this.teammates, this.enemies, this.ball);
     });
@@ -453,7 +545,7 @@ export class RunScene extends Phaser.Scene {
       if (this.ball.isLoose && !this.player.hasBall && !this.player.isStunned) {
         this.ball.attachTo(this.player);
         this.player.receiveBall();
-        this.momentStats.passesCompleted++;  // Count successful receives
+        this.momentStats.passesCompleted++;
       }
     });
     
@@ -477,19 +569,15 @@ export class RunScene extends Phaser.Scene {
       });
     });
     
-    // === IMPROVED GOAL DETECTION ===
+    // === ROBUST GOAL DETECTION ===
     // Right goal (player scores)
     this.physics.add.overlap(this.ball, this.rightGoalSensor, () => {
-      if (!this.isGoalScored && !this.isTransitioning && this.isValidGoal(true)) {
-        this.scoreGoal(true);
-      }
+      this.checkGoal(true);
     });
     
     // Left goal (enemy scores)
     this.physics.add.overlap(this.ball, this.leftGoalSensor, () => {
-      if (!this.isGoalScored && !this.isTransitioning && this.isValidGoal(false)) {
-        this.scoreGoal(false);
-      }
+      this.checkGoal(false);
     });
     
     // Net zones - bounce ball back
@@ -506,48 +594,53 @@ export class RunScene extends Phaser.Scene {
     });
   }
   
-  // Check if ball qualifies as a goal
-  private isValidGoal(isRightGoal: boolean): boolean {
-    if (!this.ball.isLoose) return false;
+  /**
+   * Check if a goal should be scored
+   * Uses simple rule: ball center in goal mouth + not on cooldown
+   */
+  private checkGoal(isRightGoal: boolean): void {
+    // Skip if already scored or on cooldown
+    if (this.isGoalScored || this.isTransitioning) return;
+    if (this.time.now < this.goalCooldownUntil) return;
     
-    const vel = this.ball.body!.velocity;
-    const speed = vel.length();
+    // Ball must be loose
+    if (!this.ball.isLoose) return;
     
-    // Must have minimum speed
-    if (speed < 30) return false;
-    
-    // Must be moving toward the goal
-    const movingRight = vel.x > 0;
-    const movingLeft = vel.x < 0;
-    
-    if (isRightGoal && !movingRight) return false;
-    if (!isRightGoal && !movingLeft) return false;
-    
-    // Ball must be within goal height
+    // Check ball is within goal mouth Y range
     const goalY = this.fieldHeight / 2;
     const halfHeight = this.goalHeight / 2;
     if (this.ball.y < goalY - halfHeight || this.ball.y > goalY + halfHeight) {
-      return false;
+      return;
     }
     
-    return true;
+    // Check ball crossed the goal line (using previous position)
+    const goalLineX = isRightGoal ? this.fieldWidth - TUNING.GOAL_SENSOR_DEPTH : TUNING.GOAL_SENSOR_DEPTH;
+    const crossed = isRightGoal
+      ? this.ball.crossedLine(goalLineX, 'right') || this.ball.x >= goalLineX
+      : this.ball.crossedLine(goalLineX, 'left') || this.ball.x <= goalLineX;
+    
+    if (!crossed) return;
+    
+    // Check minimum speed (prevents dribble-ins)
+    const speed = this.ball.getSpeed();
+    if (speed < TUNING.GOAL_MIN_SPEED) return;
+    
+    // GOAL!
+    this.scoreGoal(isRightGoal);
   }
   
   private bounceFromNet(isLeftNet: boolean): void {
     const vel = this.ball.body!.velocity;
     
-    // Bounce outward with dampening
-    const bounceVelX = isLeftNet ? Math.abs(vel.x) * 0.4 : -Math.abs(vel.x) * 0.4;
-    const bounceVelY = vel.y * 0.5;
+    const bounceVelX = isLeftNet ? Math.abs(vel.x) * TUNING.BALL_NET_BOUNCE : -Math.abs(vel.x) * TUNING.BALL_NET_BOUNCE;
+    const bounceVelY = vel.y * TUNING.BALL_NET_BOUNCE;
     
     this.ball.setVelocity(bounceVelX, bounceVelY);
     
-    // Net shake effect
     this.shakeGoalNet(isLeftNet);
   }
   
   private setupEventListeners(): void {
-    // Moment events
     this.momentSystem.on('momentStarted', (data: any) => {
       this.toastManager.info(`${data.moment.name}`, data.moment.description);
     });
@@ -572,51 +665,47 @@ export class RunScene extends Phaser.Scene {
       this.endRun(data);
     });
     
-    // Upgrade events
+    // Upgrade proc events
+    this.upgradeSystem.on('upgradeProc', (data: any) => {
+      this.uiSystem.showUpgradeProc(data.upgrade, data.intensity);
+    });
+    
     this.upgradeSystem.on('upgradeAdded', (upgrade: any) => {
-      this.uiSystem.addUpgradeIcon(upgrade.icon, upgrade.name);
+      this.uiSystem.addUpgradeIcon(upgrade.icon, upgrade.name, upgrade.rarity);
     });
   }
   
   private startMoment(): void {
     this.isTransitioning = false;
     this.isGoalScored = false;
+    this.goalCooldownUntil = 0;
     this.resetMomentStats();
     
-    // Reset positions
     this.resetPositions();
     
-    // Get moment config
     const moment = this.momentSystem.getCurrentMoment();
     if (!moment) return;
     
-    // Setup teams based on moment
     this.createTeammates(moment.teamSize.player - 1);
     this.createEnemies(moment.teamSize.enemy, moment.isBoss);
     this.updateEntityReferences();
     this.setupCollisions();
     
-    // Apply modifiers
     moment.modifiers.forEach(mod => {
       if (mod.effect === 'reducedControl') {
-        // Wet turf - reduce control
         this.player.stats.control *= 0.8;
       }
     });
     
-    // Start the moment
     this.momentSystem.startMoment();
     this.upgradeSystem.resetMoment();
     
-    // Give ball to appropriate team
     if (moment.objective === 'defend' || moment.objective === 'survive') {
-      // Enemies start with ball
       if (this.enemies.length > 0) {
         this.ball.attachTo(this.enemies[0]);
         this.enemies[0].receiveBall();
       }
     } else {
-      // Player team starts with ball
       this.ball.attachTo(this.player);
       this.player.receiveBall();
     }
@@ -649,9 +738,8 @@ export class RunScene extends Phaser.Scene {
   }
   
   private attemptTackle(tackler: any, target?: any): void {
-    const tackleRange = 60;
+    const tackleRange = TUNING.AI_TACKLE_RANGE + 10;
     
-    // Find nearest ball carrier
     let carrier: any = null;
     if (target && target.hasBall) {
       carrier = target;
@@ -665,11 +753,9 @@ export class RunScene extends Phaser.Scene {
     const dist = Phaser.Math.Distance.Between(tackler.x, tackler.y, carrier.x, carrier.y);
     
     if (dist < tackleRange) {
-      // Tackle success based on stats
-      const tackleSuccess = 0.6 + (tackler.stats?.tackle || 5) * 0.04;
+      const tackleSuccess = TUNING.TACKLE_SUCCESS_BASE + (tackler.stats?.tackle || 5) * TUNING.TACKLE_SUCCESS_SCALE;
       
       if (Math.random() < tackleSuccess) {
-        // Successful tackle
         carrier.loseBall();
         carrier.applyStun(300);
         this.ball.drop();
@@ -677,7 +763,9 @@ export class RunScene extends Phaser.Scene {
         this.particleManager.tackleImpact(carrier.x, carrier.y);
         this.audioSystem.playSteal();
         
-        // Track stats
+        // Camera shake
+        this.cameras.main.shake(TUNING.CAMERA_SHAKE_TACKLE_DURATION, TUNING.CAMERA_SHAKE_TACKLE);
+        
         if (tackler === this.player) {
           this.momentStats.tacklesWon++;
           this.upgradeSystem.trigger('onSteal', {
@@ -690,7 +778,6 @@ export class RunScene extends Phaser.Scene {
           this.momentSystem.playerStole();
         }
       } else {
-        // Failed tackle
         tackler.applyStun(200);
         if (tackler === this.player) {
           this.momentStats.tacklesLost++;
@@ -704,12 +791,15 @@ export class RunScene extends Phaser.Scene {
   private scoreGoal(isPlayerGoal: boolean): void {
     this.isGoalScored = true;
     this.isTransitioning = true;
+    this.goalCooldownUntil = this.time.now + TUNING.GOAL_COOLDOWN;
     
-    // Freeze ball
+    // Move ball to safe position
+    const safeX = isPlayerGoal ? this.fieldWidth - 30 : 30;
+    this.ball.setPosition(safeX, this.fieldHeight / 2);
     this.ball.setVelocity(0, 0);
     
-    // Camera shake
-    this.cameras.main.shake(200, 0.01);
+    // Camera shake - stronger for goals
+    this.cameras.main.shake(TUNING.CAMERA_SHAKE_GOAL_DURATION, TUNING.CAMERA_SHAKE_GOAL);
     
     if (isPlayerGoal) {
       this.momentStats.goalsScored++;
@@ -717,13 +807,9 @@ export class RunScene extends Phaser.Scene {
       this.particleManager.goalCelebration(this.fieldWidth - 50, this.fieldHeight / 2);
       this.uiSystem.showGoalNotification(true);
       
-      // Shake the net
       this.shakeGoalNet(false);
       
-      // Check for rebound
       const isRebound = this.ball.isRebound;
-      
-      // Check for assist
       const lastOwner = this.ball.lastOwner;
       const isFromAssist = lastOwner && lastOwner !== this.ball.lastShooter;
       
@@ -749,8 +835,8 @@ export class RunScene extends Phaser.Scene {
       this.momentSystem.enemyScored();
     }
     
-    // Reset after freeze period (~900ms)
-    this.time.delayedCall(900, () => {
+    // Reset after freeze period
+    this.time.delayedCall(850, () => {
       this.showKickoffCountdown();
     });
   }
@@ -764,7 +850,6 @@ export class RunScene extends Phaser.Scene {
     this.isCountingDown = true;
     this.resetPositions();
     
-    // 3..2..1 countdown
     let count = 3;
     const countdownText = this.add.text(
       this.cameras.main.centerX,
@@ -784,7 +869,7 @@ export class RunScene extends Phaser.Scene {
     countdownText.setDepth(150);
     
     const countdownTimer = this.time.addEvent({
-      delay: 600,
+      delay: 550,
       callback: () => {
         count--;
         if (count > 0) {
@@ -802,7 +887,6 @@ export class RunScene extends Phaser.Scene {
           this.isTransitioning = false;
           this.isCountingDown = false;
           
-          // Give ball to player after goal
           this.ball.attachTo(this.player);
           this.player.receiveBall();
           
@@ -816,15 +900,13 @@ export class RunScene extends Phaser.Scene {
   private handleMomentComplete(data: any): void {
     this.isTransitioning = true;
     
-    // Calculate total time for possession percentage
-    this.momentStats.totalTime = data.isWon ? 
-      (this.momentSystem.getCurrentMoment()?.duration || 45) : 
-      (this.momentSystem.getCurrentMoment()?.duration || 45) - (this.momentSystem.getCurrentState()?.timeRemaining || 0);
+    this.momentStats.totalTime = data.isWon
+      ? (this.momentSystem.getCurrentMoment()?.duration || 45)
+      : (this.momentSystem.getCurrentMoment()?.duration || 45) - (this.momentSystem.getCurrentState()?.timeRemaining || 0);
     
     this.uiSystem.showMomentComplete(data.isWon);
     
     this.time.delayedCall(2000, () => {
-      // Show recap, then upgrade draft
       if (this.momentStats.shotsTaken > 0 || this.momentStats.tacklesWon > 0) {
         this.uiSystem.showMomentRecap(this.momentStats, () => {
           this.proceedAfterMoment();
@@ -837,17 +919,14 @@ export class RunScene extends Phaser.Scene {
   
   private proceedAfterMoment(): void {
     if (this.momentSystem.nextMoment()) {
-      // Show upgrade draft
       this.showUpgradeDraft();
     }
-    // Else run is complete - handled by runComplete event
   }
   
   private showUpgradeDraft(): void {
     const progress = this.momentSystem.getProgress();
     const saveSystem = SaveSystem.getInstance();
     
-    // Get meta upgrade bonuses
     const extraChoices = saveSystem.getMetaUpgradeLevel('upgradeChoices');
     const rerolls = saveSystem.getMetaUpgradeLevel('rerollCount');
     
@@ -889,16 +968,13 @@ export class RunScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     if (this.isPaused || this.isCountingDown) return;
     
-    // Get input
     const input = this.inputSystem.getState(this.player.x, this.player.y);
     
-    // Handle controls overlay toggle
     if (input.showHelp) {
       this.uiSystem.toggleControlsOverlay();
       return;
     }
     
-    // If controls overlay is visible, don't process game input
     if (this.uiSystem.isControlsVisible()) {
       if (input.cancel) {
         this.uiSystem.hideControlsOverlay();
@@ -906,7 +982,6 @@ export class RunScene extends Phaser.Scene {
       return;
     }
     
-    // Handle pause
     if (input.pause) {
       this.togglePause();
       return;
@@ -966,6 +1041,11 @@ export class RunScene extends Phaser.Scene {
     // Update radar
     this.uiSystem.updateRadar(this.player, this.teammates, this.enemies, this.ball);
     
+    // Update goal sensor debug if enabled
+    if (this.debugGoalSensors) {
+      this.updateGoalSensorDebug();
+    }
+    
     // Trigger onTick upgrades
     this.upgradeSystem.trigger('onTick', {
       player: this.player,
@@ -996,11 +1076,9 @@ export class RunScene extends Phaser.Scene {
     pauseOverlay.setDepth(200);
     (this as any).pauseOverlay = pauseOverlay;
     
-    // Dim background
     const bg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7);
     pauseOverlay.add(bg);
     
-    // Title
     const title = this.add.text(width / 2, height / 2 - 100, 'PAUSED', {
       fontFamily: 'Arial, sans-serif',
       fontSize: '48px',
@@ -1010,19 +1088,16 @@ export class RunScene extends Phaser.Scene {
     title.setOrigin(0.5);
     pauseOverlay.add(title);
     
-    // Resume button
     const resumeBtn = this.createPauseButton(width / 2, height / 2, 'RESUME', () => {
       this.togglePause();
     });
     pauseOverlay.add(resumeBtn);
     
-    // Controls button
     const controlsBtn = this.createPauseButton(width / 2, height / 2 + 60, 'CONTROLS', () => {
       this.uiSystem.showControlsOverlay();
     });
     pauseOverlay.add(controlsBtn);
     
-    // Quit button
     const quitBtn = this.createPauseButton(width / 2, height / 2 + 120, 'QUIT RUN', () => {
       this.scene.start('MenuScene');
     });

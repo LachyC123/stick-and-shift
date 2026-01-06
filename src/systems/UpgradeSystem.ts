@@ -1,8 +1,9 @@
 // UpgradeSystem for Stick & Shift
 // Manages upgrade effects with event hooks
+// Improved: proc feedback system, proc counting
 
 import Phaser from 'phaser';
-import { Upgrade, UpgradeHook, SynergySet, getUpgradeById } from '../data/upgrades';
+import { Upgrade, UpgradeHook, SynergySet, getUpgradeById, Rarity } from '../data/upgrades';
 import { CharacterStats } from '../data/characters';
 
 export interface UpgradeContext {
@@ -20,6 +21,13 @@ export interface UpgradeEffect {
   callback: (context: UpgradeContext) => void;
 }
 
+export interface ProcStats {
+  upgradeId: string;
+  upgradeName: string;
+  upgradeIcon: string;
+  count: number;
+}
+
 export class UpgradeSystem extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene;
   private ownedUpgrades: Upgrade[] = [];
@@ -32,6 +40,11 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
   private stacks: Map<string, number> = new Map();
   private cooldowns: Map<string, number> = new Map();
   private oneTimeUsed: Set<string> = new Set();
+  
+  // Proc tracking for moment summary
+  private procCounts: Map<string, number> = new Map();
+  private lastProcTime: Map<string, number> = new Map();
+  private readonly PROC_COOLDOWN = 200;  // Min ms between visual procs for same upgrade
   
   constructor(scene: Phaser.Scene) {
     super();
@@ -83,68 +96,79 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
       // Speed effects
       speedBoost10: () => {},  // Handled by stat modifiers
       openSpaceSpeed: (ctx) => {
-        // Check if no enemies nearby
         if (ctx.player && this.isInOpenSpace(ctx)) {
           this.addTempModifier('speed', 10, 100);
+          this.procUpgrade('openSpaceSpeed', 0.5);
         }
       },
       pressSpeed: (ctx) => {
         if (ctx.player && !ctx.player.hasBall) {
           this.addTempModifier('speed', 5, 100);
+          this.procUpgrade('pressSpeed', 0.3);
         }
       },
       dodgeSpeedBurst: (ctx) => {
         this.addTempModifier('speed', 15, 2000);
+        this.procUpgrade('dodgeSpeedBurst', 1);
       },
       
       // Shot effects
       circleShot: (ctx) => {
         if (ctx.position && this.isInCircle(ctx.position)) {
           this.addTempModifier('shotPower', 30, 500);
+          this.procUpgrade('circleShot', 1);
         }
       },
       reboundShotPower: (ctx) => {
         this.addTempModifier('shotPower', 20, 500);
+        this.procUpgrade('reboundShotPower', 1);
       },
       stationaryShotBoost: (ctx) => {
         if (ctx.player && !ctx.player.isMoving) {
           this.addTempModifier('shotPower', 50, 500);
+          this.procUpgrade('stationaryShotBoost', 1);
         }
       },
       chargeShot: (ctx) => {
         // Charge handled in player shoot logic
       },
       curvingShot: (ctx) => {
-        // Curve applied in ball physics
         ctx.ball?.setCurve(0.3);
+        this.procUpgrade('curvingShot', 0.8);
       },
       splitShot: (ctx) => {
-        // Create second ball
         this.emit('createProjectile', { ...ctx, power: 0.5 });
+        this.procUpgrade('splitShot', 1);
       },
       
       // Pass effects
       trianglePassBoost: (ctx) => {
         if (this.checkTriangleFormation(ctx)) {
           this.addTempModifier('passPower', 25, 500);
+          this.procUpgrade('trianglePassBoost', 1);
         }
       },
       fastPass: (ctx) => {
         ctx.ball?.setSpeedMultiplier(1.3);
+        this.procUpgrade('fastPass', 0.6);
       },
       boomerangPass: (ctx) => {
         ctx.ball?.setBoomerang(true);
+        this.procUpgrade('boomerangPass', 1);
       },
       predictivePass: (ctx) => {
         ctx.ball?.setPredictive(true);
+        this.procUpgrade('predictivePass', 0.7);
       },
       oneTouchPass: (ctx) => {
         if (ctx.player?.justReceivedBall) {
           this.addTempModifier('passPower', 30, 1000);
+          this.procUpgrade('oneTouchPass', 1);
         }
       },
       lobPass: (ctx) => {
         ctx.ball?.setAerial(true);
+        this.procUpgrade('lobPass', 0.8);
       },
       
       // Tackle effects
@@ -152,58 +176,70 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
       pressTackleRange: (ctx) => {
         if (!ctx.player?.hasBall) {
           this.addTempModifier('tackleRange', 20, 500);
+          this.procUpgrade('pressTackleRange', 0.5);
         }
       },
       counterPressTackle: (ctx) => {
         if (ctx.player?.recentlyLostBall) {
           this.addTempModifier('tackle', 40, 2000);
+          this.procUpgrade('counterPressTackle', 1);
         }
       },
       tackleReset: () => {
         this.cooldowns.delete('tackle');
+        this.procUpgrade('tackleReset', 1);
       },
       persistentTackle: (ctx) => {
-        if (!ctx.target) {  // Failed tackle
+        if (!ctx.target) {
           const stacks = (this.stacks.get('persistentTackle') || 0) + 2;
           this.stacks.set('persistentTackle', stacks);
           this.addTempModifier('tackle', stacks, 10000);
+          this.procUpgrade('persistentTackle', 0.6);
         } else {
           this.stacks.set('persistentTackle', 0);
         }
       },
       tackleSlow: (ctx) => {
-        ctx.target?.applyDebuff('slow', 2000);
+        ctx.target?.applyDebuff?.('slow', 2000);
+        this.procUpgrade('tackleSlow', 0.8);
       },
       
       // Steal effects
       magnetSteal: () => {},
       tackleStaminaRestore: (ctx) => {
         ctx.player?.restoreStamina(20);
+        this.procUpgrade('tackleStaminaRestore', 1);
       },
       stealDodgeReset: () => {
         this.cooldowns.delete('dodge');
+        this.procUpgrade('stealDodgeReset', 1);
       },
       tackleSpeed: (ctx) => {
         this.addTempModifier('speed', 20, 2000);
+        this.procUpgrade('tackleSpeed', 1);
       },
       stealStamina: (ctx) => {
-        ctx.target?.drainStamina(15);
+        ctx.target?.drainStamina?.(15);
         ctx.player?.restoreStamina(15);
+        this.procUpgrade('stealStamina', 1);
       },
       
       // Dodge effects
       extendedIframes: () => {},
       dodgeDecoy: (ctx) => {
         this.emit('createDecoy', ctx);
+        this.procUpgrade('dodgeDecoy', 1);
       },
       dodgeShield: (ctx) => {
         ctx.player?.addShield(500);
+        this.procUpgrade('dodgeShield', 1);
       },
       slowMo: (ctx) => {
         this.scene.time.timeScale = 0.5;
         this.scene.time.delayedCall(500, () => {
           this.scene.time.timeScale = 1;
         });
+        this.procUpgrade('slowMo', 1);
       },
       
       // Goal effects
@@ -211,10 +247,12 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
         const stacks = Math.min((this.stacks.get('goalSpeed') || 0) + 1, 3);
         this.stacks.set('goalSpeed', stacks);
         this.addTempModifier('speed', stacks * 5, 60000);
+        this.procUpgrade('goalSpeedStack', 1);
       },
       goalFullRestore: (ctx) => {
         ctx.player?.restoreStamina(100);
         this.cooldowns.clear();
+        this.procUpgrade('goalFullRestore', 1);
       },
       
       // Defensive effects
@@ -339,6 +377,68 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
     });
   }
   
+  /**
+   * Call this when an upgrade actually does something visible
+   * Shows feedback to player and tracks proc count
+   */
+  procUpgrade(upgradeId: string, intensity: number = 1): void {
+    const upgrade = this.ownedUpgrades.find(u => u.id === upgradeId);
+    if (!upgrade) return;
+    
+    // Track proc count
+    const count = (this.procCounts.get(upgradeId) || 0) + 1;
+    this.procCounts.set(upgradeId, count);
+    
+    // Check visual proc cooldown (don't spam visual feedback)
+    const lastProc = this.lastProcTime.get(upgradeId) || 0;
+    const now = this.scene.time.now;
+    
+    if (now - lastProc < this.PROC_COOLDOWN) {
+      return;  // Skip visual but count was still tracked
+    }
+    
+    this.lastProcTime.set(upgradeId, now);
+    
+    // Emit proc event for UI feedback
+    this.emit('upgradeProc', {
+      upgrade,
+      upgradeId,
+      intensity,
+      count
+    });
+  }
+  
+  /**
+   * Get top N procs for moment summary
+   */
+  getTopProcs(limit: number = 3): ProcStats[] {
+    const stats: ProcStats[] = [];
+    
+    this.procCounts.forEach((count, upgradeId) => {
+      const upgrade = this.ownedUpgrades.find(u => u.id === upgradeId);
+      if (upgrade && count > 0) {
+        stats.push({
+          upgradeId,
+          upgradeName: upgrade.name,
+          upgradeIcon: upgrade.icon,
+          count
+        });
+      }
+    });
+    
+    // Sort by count descending
+    stats.sort((a, b) => b.count - a.count);
+    
+    return stats.slice(0, limit);
+  }
+  
+  /**
+   * Get proc count for a specific upgrade
+   */
+  getProcCount(upgradeId: string): number {
+    return this.procCounts.get(upgradeId) || 0;
+  }
+  
   // Get modified stat value
   getModifiedStat(baseStat: number, statName: string): number {
     let modifier = this.statModifiers.get(statName) || 0;
@@ -457,11 +557,15 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
     this.stacks.clear();
     this.cooldowns.clear();
     this.oneTimeUsed.clear();
+    this.procCounts.clear();
+    this.lastProcTime.clear();
   }
   
   // Reset one-time effects for new moment
   resetMoment(): void {
     this.oneTimeUsed.delete('autoBlock');
     this.oneTimeUsed.delete('guaranteedGoal');
+    this.procCounts.clear();
+    this.lastProcTime.clear();
   }
 }

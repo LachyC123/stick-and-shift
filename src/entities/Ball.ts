@@ -1,16 +1,13 @@
 // Ball entity for Stick & Shift
 // Field hockey ball with physics and ownership
+// Improved: central tuning, kick() method, better physics
 
 import Phaser from 'phaser';
+import * as TUNING from '../data/tuning';
 
 export class Ball extends Phaser.Physics.Arcade.Sprite {
   // Ownership
   public owner: any = null;  // Player, TeammateAI, or EnemyAI
-  
-  // Physics
-  private baseSpeed: number = 400;
-  private friction: number = 0.985;
-  private bounceAmount: number = 0.8;
   
   // State
   public isLoose: boolean = true;
@@ -19,8 +16,13 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   public lastShooter: any = null;
   public isRebound: boolean = false;
   
+  // Position tracking for goal crossing detection
+  public prevX: number = 0;
+  public prevY: number = 0;
+  
   // Special effects
   private curveAmount: number = 0;
+  private spinAmount: number = 0;
   private isBoomerang: boolean = false;
   private boomerangOrigin?: { x: number; y: number };
   private isPredictive: boolean = false;
@@ -40,10 +42,15 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     // Physics setup
     this.setCircle(8, 2, 2);
-    this.setBounce(this.bounceAmount);
+    this.setBounce(TUNING.BALL_BOUNCE);
     this.setCollideWorldBounds(true);
-    this.setDrag(50);
+    this.setDrag(30);  // Low drag, we handle friction manually
+    this.setMaxVelocity(TUNING.BALL_MAX_SPEED, TUNING.BALL_MAX_SPEED);
     this.setDepth(15);
+    
+    // Store initial position
+    this.prevX = x;
+    this.prevY = y;
     
     // Trail effect
     this.trail = scene.add.graphics();
@@ -51,6 +58,10 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   }
   
   update(delta: number): void {
+    // Store previous position for crossing detection
+    this.prevX = this.x;
+    this.prevY = this.y;
+    
     // Handle ownership
     if (this.owner) {
       this.followOwner();
@@ -82,7 +93,7 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     const offset = this.owner.getBallOffset?.() || { x: this.owner.x + 25, y: this.owner.y };
     
     // Apply slight bobble for dribbling feel
-    const bobble = Math.sin(this.scene.time.now * 0.01) * 2;
+    const bobble = Math.sin(this.scene.time.now * 0.012) * 2.5;
     
     this.setPosition(offset.x + bobble * 0.5, offset.y + bobble * 0.3);
     this.setVelocity(0, 0);
@@ -90,27 +101,48 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   }
   
   private updatePhysics(delta: number): void {
-    // Apply friction
     const vel = this.body!.velocity;
-    this.setVelocity(vel.x * this.friction, vel.y * this.friction);
+    const speed = vel.length();
     
-    // Apply curve if set
-    if (this.curveAmount !== 0) {
-      const speed = vel.length();
-      if (speed > 50) {
-        const perpX = -vel.y / speed;
-        const perpY = vel.x / speed;
-        this.setVelocity(
-          vel.x + perpX * this.curveAmount * speed * 0.05,
-          vel.y + perpY * this.curveAmount * speed * 0.05
-        );
-        // Decay curve
-        this.curveAmount *= 0.98;
+    // Apply custom drag/friction
+    if (speed > TUNING.BALL_STOP_THRESHOLD) {
+      this.setVelocity(vel.x * TUNING.BALL_DRAG, vel.y * TUNING.BALL_DRAG);
+    }
+    
+    // Apply spin/curve if set
+    if (this.spinAmount !== 0 && speed > 50) {
+      const perpX = -vel.y / speed;
+      const perpY = vel.x / speed;
+      this.setVelocity(
+        vel.x + perpX * this.spinAmount * speed,
+        vel.y + perpY * this.spinAmount * speed
+      );
+      // Decay spin
+      this.spinAmount *= TUNING.SHOT_SPIN_DECAY;
+      if (Math.abs(this.spinAmount) < 0.001) {
+        this.spinAmount = 0;
       }
     }
     
+    // Apply legacy curve if set
+    if (this.curveAmount !== 0 && speed > 50) {
+      const perpX = -vel.y / speed;
+      const perpY = vel.x / speed;
+      this.setVelocity(
+        vel.x + perpX * this.curveAmount * speed * 0.05,
+        vel.y + perpY * this.curveAmount * speed * 0.05
+      );
+      this.curveAmount *= 0.98;
+    }
+    
+    // Clamp to max speed
+    if (speed > TUNING.BALL_MAX_SPEED) {
+      const scale = TUNING.BALL_MAX_SPEED / speed;
+      this.setVelocity(vel.x * scale, vel.y * scale);
+    }
+    
     // Stop if very slow
-    if (vel.length() < 10) {
+    if (speed < TUNING.BALL_STOP_THRESHOLD) {
       this.setVelocity(0, 0);
     }
   }
@@ -119,18 +151,18 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     const speed = this.body!.velocity.length();
     
     // Only show trail when moving fast
-    if (speed > 100) {
+    if (speed > 150) {
       this.trailPoints.unshift({ x: this.x, y: this.y, alpha: 1 });
     }
     
     // Limit trail length
-    if (this.trailPoints.length > 10) {
+    if (this.trailPoints.length > 12) {
       this.trailPoints.pop();
     }
     
     // Fade trail points
-    this.trailPoints.forEach((p, i) => {
-      p.alpha *= 0.85;
+    this.trailPoints.forEach((p) => {
+      p.alpha *= 0.82;
     });
     
     // Remove faded points
@@ -139,21 +171,18 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     // Draw trail
     this.trail.clear();
     this.trailPoints.forEach((point, i) => {
-      const size = 6 * (1 - i / this.trailPoints.length);
-      this.trail.fillStyle(0xffffff, point.alpha * 0.5);
+      const size = 7 * (1 - i / this.trailPoints.length);
+      this.trail.fillStyle(0xffffff, point.alpha * 0.6);
       this.trail.fillCircle(point.x, point.y, size);
     });
   }
   
   private checkRebound(): void {
-    // Check if ball bounced off goal backboard
     const vel = this.body!.velocity;
     if (this.lastShooter && vel.length() > 50) {
-      // Ball is still moving after a shot - could be rebound
       this.isRebound = true;
     }
     
-    // Reset after ball slows
     if (vel.length() < 30) {
       this.scene.time.delayedCall(500, () => {
         this.isRebound = false;
@@ -167,7 +196,6 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     const vel = this.body!.velocity;
     if (vel.length() < 100) {
-      // Ball slowing down, return to origin
       const dx = this.boomerangOrigin.x - this.x;
       const dy = this.boomerangOrigin.y - this.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -189,46 +217,76 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     const vel = this.body!.velocity;
     this.setVelocity(
-      vel.x + dx * 0.02,
-      vel.y + dy * 0.02
+      vel.x + dx * 0.025,
+      vel.y + dy * 0.025
     );
   }
   
-  // Shoot the ball
+  /**
+   * Unified kick method for shooting, passing, and any ball propulsion
+   * @param direction Normalized direction vector
+   * @param speed Speed in pixels/sec
+   * @param spin Optional lateral spin (positive = right curve)
+   * @param reason What caused this kick
+   */
+  kick(
+    direction: { x: number; y: number },
+    speed: number,
+    spin: number = 0,
+    reason: 'pass' | 'shot' | 'tackle' | 'drop' = 'shot'
+  ): void {
+    // Normalize direction
+    const len = Math.sqrt(direction.x * direction.x + direction.y * direction.y) || 1;
+    const dirX = direction.x / len;
+    const dirY = direction.y / len;
+    
+    // Apply speed multiplier from upgrades
+    const finalSpeed = Math.min(speed * this.speedMultiplier, TUNING.BALL_MAX_SPEED);
+    
+    // Set velocity
+    this.setVelocity(dirX * finalSpeed, dirY * finalSpeed);
+    
+    // Apply spin for shots
+    if (spin !== 0) {
+      this.spinAmount = spin;
+    }
+    
+    // Clear trail for fresh start
+    if (reason === 'shot') {
+      this.trailPoints = [];
+    }
+    
+    // Reset multiplier
+    this.speedMultiplier = 1;
+  }
+  
+  // Shoot the ball (uses kick internally)
   shoot(power: number, angle: number, shooter: any): void {
     this.owner = null;
     this.lastOwner = shooter;
     this.lastShooter = shooter;
     this.isLoose = true;
     
-    const speed = power * this.speedMultiplier;
-    this.setVelocity(
-      Math.cos(angle) * speed,
-      Math.sin(angle) * speed
-    );
+    const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+    const spin = TUNING.SHOT_SPIN_BASE * (Math.random() - 0.5) * 2;
     
-    // Reset special states
-    this.speedMultiplier = 1;
+    this.kick(direction, power, spin, 'shot');
   }
   
-  // Pass the ball
+  // Pass the ball (uses kick internally)
   pass(power: number, angle: number, passer: any): void {
     this.owner = null;
     this.lastOwner = passer;
     this.isLoose = true;
     
-    const speed = power * 0.7 * this.speedMultiplier;  // Passes are slower
-    this.setVelocity(
-      Math.cos(angle) * speed,
-      Math.sin(angle) * speed
-    );
+    const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+    
+    this.kick(direction, power, 0, 'pass');
     
     // Set boomerang if enabled
     if (this.isBoomerang) {
       this.boomerangOrigin = { x: passer.x, y: passer.y };
     }
-    
-    this.speedMultiplier = 1;
   }
   
   // Attach to new owner
@@ -241,6 +299,7 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     // Reset special effects
     this.curveAmount = 0;
+    this.spinAmount = 0;
     this.isBoomerang = false;
     this.boomerangOrigin = undefined;
     this.isPredictive = false;
@@ -255,7 +314,7 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     // Small random velocity
     const randomAngle = Math.random() * Math.PI * 2;
-    const randomSpeed = 50 + Math.random() * 50;
+    const randomSpeed = TUNING.KICK_IMPULSE_MIN + Math.random() * (TUNING.KICK_IMPULSE_MAX - TUNING.KICK_IMPULSE_MIN);
     this.setVelocity(
       Math.cos(randomAngle) * randomSpeed,
       Math.sin(randomAngle) * randomSpeed
@@ -264,13 +323,15 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   
   // Reset to center
   resetToCenter(): void {
-    this.setPosition(600, 350);  // Center of field
+    this.setPosition(600, 350);
     this.setVelocity(0, 0);
     this.owner = null;
     this.lastOwner = null;
     this.lastShooter = null;
     this.isLoose = true;
     this.isRebound = false;
+    this.prevX = 600;
+    this.prevY = 350;
     
     // Clear trail
     this.trailPoints = [];
@@ -278,6 +339,7 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     // Reset special effects
     this.curveAmount = 0;
+    this.spinAmount = 0;
     this.isBoomerang = false;
     this.boomerangOrigin = undefined;
     this.isPredictive = false;
@@ -288,6 +350,10 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   // Special effect setters
   setCurve(amount: number): void {
     this.curveAmount = amount;
+  }
+  
+  setSpin(amount: number): void {
+    this.spinAmount = amount;
   }
   
   setBoomerang(enabled: boolean): void {
@@ -301,7 +367,6 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   setAerial(enabled: boolean): void {
     this.isAerial = enabled;
     if (enabled) {
-      // Brief aerial animation
       this.scene.tweens.add({
         targets: this,
         scaleY: 1.5,
@@ -318,7 +383,6 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   applyMagnet(targetX: number, targetY: number, strength: number): void {
     this.magnetTarget = { x: targetX, y: targetY };
     
-    // Clear magnet after short time
     this.scene.time.delayedCall(100, () => {
       this.magnetTarget = undefined;
     });
@@ -336,6 +400,20 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
       x: this.x + vel.x * timeAhead * 0.001,
       y: this.y + vel.y * timeAhead * 0.001
     };
+  }
+  
+  // Get current speed
+  getSpeed(): number {
+    return this.body!.velocity.length();
+  }
+  
+  // Check if ball crossed a vertical line (for goal detection)
+  crossedLine(lineX: number, direction: 'left' | 'right'): boolean {
+    if (direction === 'right') {
+      return this.prevX < lineX && this.x >= lineX;
+    } else {
+      return this.prevX > lineX && this.x <= lineX;
+    }
   }
   
   destroy(fromScene?: boolean): void {

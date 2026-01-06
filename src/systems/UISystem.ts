@@ -1,9 +1,10 @@
 // UISystem for Stick & Shift
 // Manages HUD, cooldown displays, radar, controls overlay
-// Improved: mini radar, controls panel, help button, post-moment recap
+// Improved: mini radar, controls panel, help button, post-moment recap, proc feedback
 
 import Phaser from 'phaser';
 import { MomentState } from './MomentSystem';
+import { Upgrade, Rarity, RARITY_COLORS } from '../data/upgrades';
 
 export interface MomentRecapStats {
   goalsScored: number;
@@ -16,6 +17,14 @@ export interface MomentRecapStats {
   shotsTaken: number;
   possessionTime: number;
   totalTime: number;
+}
+
+interface UpgradeIconData {
+  container: Phaser.GameObjects.Container;
+  bg: Phaser.GameObjects.Arc;
+  icon: Phaser.GameObjects.Text;
+  rarity: Rarity;
+  upgradeId?: string;
 }
 
 export class UISystem {
@@ -35,8 +44,10 @@ export class UISystem {
   private cooldownContainer?: Phaser.GameObjects.Container;
   private cooldownIcons: Map<string, { bg: Phaser.GameObjects.Arc; overlay: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text }> = new Map();
   
-  // Upgrade display
+  // Upgrade display (improved with rarity tracking)
   private upgradeContainer?: Phaser.GameObjects.Container;
+  private upgradeIcons: UpgradeIconData[] = [];
+  private maxUpgradeIcons: number = 6;
   
   // Mini radar
   private radarContainer?: Phaser.GameObjects.Container;
@@ -842,26 +853,155 @@ export class UISystem {
   }
   
   // Add upgrade icon to display
-  addUpgradeIcon(icon: string, name: string): void {
+  addUpgradeIcon(icon: string, name: string, rarity: Rarity = 'common'): void {
     if (!this.upgradeContainer) return;
     
-    const index = this.upgradeContainer.length;
-    const y = index * 35;
+    // Remove oldest if at max
+    if (this.upgradeIcons.length >= this.maxUpgradeIcons) {
+      const oldest = this.upgradeIcons.shift();
+      oldest?.container.destroy();
+      this.repositionUpgradeIcons();
+    }
     
-    const bg = this.scene.add.circle(15, y, 15, 0x1a1a2e, 0.8);
-    bg.setStrokeStyle(1, 0x3498db);
-    this.upgradeContainer.add(bg);
+    const index = this.upgradeIcons.length;
+    const y = index * 38;
     
-    const iconText = this.scene.add.text(15, y, icon, {
-      fontSize: '16px'
+    const container = this.scene.add.container(0, y);
+    this.upgradeContainer.add(container);
+    
+    // Background with rarity color
+    const rarityColor = RARITY_COLORS[rarity] || 0x3498db;
+    const bg = this.scene.add.circle(15, 0, 17, 0x1a1a2e, 0.9);
+    bg.setStrokeStyle(2, rarityColor);
+    container.add(bg);
+    
+    // Icon
+    const iconText = this.scene.add.text(15, 0, icon, {
+      fontSize: '18px'
     });
     iconText.setOrigin(0.5);
-    this.upgradeContainer.add(iconText);
+    container.add(iconText);
+    
+    // Store reference
+    this.upgradeIcons.push({
+      container,
+      bg,
+      icon: iconText,
+      rarity,
+      upgradeId: name  // Use name as ID for now
+    });
+    
+    // Entrance animation
+    container.setAlpha(0);
+    container.setScale(0.5);
+    this.scene.tweens.add({
+      targets: container,
+      alpha: 1,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 200,
+      ease: 'Back.easeOut'
+    });
     
     // Tooltip on hover
     bg.setInteractive();
     bg.on('pointerover', () => {
-      // Show tooltip with name
+      // Could show tooltip with name
+    });
+  }
+  
+  private repositionUpgradeIcons(): void {
+    this.upgradeIcons.forEach((iconData, index) => {
+      this.scene.tweens.add({
+        targets: iconData.container,
+        y: index * 38,
+        duration: 150,
+        ease: 'Power2'
+      });
+    });
+  }
+  
+  // Show upgrade proc feedback
+  showUpgradeProc(upgrade: Upgrade, intensity: number = 1): void {
+    // Find the upgrade icon if it exists
+    const iconData = this.upgradeIcons.find(i => i.upgradeId === upgrade.name);
+    
+    // Pulse the icon if found
+    if (iconData) {
+      this.pulseUpgradeIcon(iconData, intensity);
+    }
+    
+    // Show toast for significant procs
+    if (intensity >= 0.7) {
+      this.showProcToast(upgrade.name, upgrade.icon, intensity);
+    }
+    
+    // Play proc sound (handled externally)
+  }
+  
+  private pulseUpgradeIcon(iconData: UpgradeIconData, intensity: number): void {
+    const { container, bg } = iconData;
+    
+    // Glow effect
+    const glowColor = RARITY_COLORS[iconData.rarity] || 0x3498db;
+    
+    // Scale pulse
+    this.scene.tweens.add({
+      targets: container,
+      scaleX: 1.25,
+      scaleY: 1.25,
+      duration: 100,
+      yoyo: true,
+      ease: 'Power2'
+    });
+    
+    // Flash the border
+    const originalWidth = bg.lineWidth;
+    bg.setStrokeStyle(4, glowColor);
+    
+    this.scene.time.delayedCall(200, () => {
+      bg.setStrokeStyle(2, glowColor);
+    });
+  }
+  
+  private showProcToast(name: string, icon: string, intensity: number): void {
+    const width = this.scene.cameras.main.width;
+    
+    const toastText = this.scene.add.text(
+      width - 20,
+      140 + this.upgradeIcons.length * 38,
+      `${icon} ${name}!`,
+      {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: intensity >= 1 ? '14px' : '12px',
+        color: intensity >= 1 ? '#f1c40f' : '#ecf0f1',
+        fontStyle: intensity >= 1 ? 'bold' : 'normal'
+      }
+    );
+    toastText.setOrigin(1, 0.5);
+    toastText.setScrollFactor(0);
+    toastText.setDepth(110);
+    
+    // Animate in and out
+    toastText.setAlpha(0);
+    toastText.x += 30;
+    
+    this.scene.tweens.add({
+      targets: toastText,
+      alpha: 1,
+      x: toastText.x - 30,
+      duration: 150,
+      ease: 'Power2',
+      onComplete: () => {
+        this.scene.tweens.add({
+          targets: toastText,
+          alpha: 0,
+          x: toastText.x - 20,
+          duration: 300,
+          delay: 800,
+          onComplete: () => toastText.destroy()
+        });
+      }
     });
   }
   
