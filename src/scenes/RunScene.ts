@@ -378,24 +378,33 @@ export class RunScene extends Phaser.Scene {
     const objComplete = momentState?.isComplete ?? false;
     const lastPossTeam = this.ball.lastPossessingTeam;
     
+    // Determine ball owner name for debug
+    let ballOwnerName = 'LOOSE';
+    if (this.ball.owner === this.player) {
+      ballOwnerName = 'PLAYER';
+    } else if (this.teammates.includes(this.ball.owner)) {
+      ballOwnerName = `TEAMMATE (${this.ball.owner?.role || '?'})`;
+    } else if (this.enemies.includes(this.ball.owner)) {
+      ballOwnerName = `ENEMY (${this.ball.owner?.role || '?'})`;
+    }
+    
     const lines = [
       `=== DEBUG (F1 to hide) ===`,
-      `Possession: ${possession}`,
+      `Ball Owner: ${ballOwnerName}`,
+      `Ball isLoose: ${this.ball.isLoose}`,
       `Last Poss Team: ${lastPossTeam}`,
+      `Init Moment: ${this.isInitializingMoment}`,
       ``,
       `Objective: ${momentDef?.objective || objective.type}`,
       `Progress: ${objProgress}/${objTarget}`,
       `Complete: ${objComplete ? 'YES' : 'no'}`,
-      `Urgency: ${(objective.urgency * 100).toFixed(0)}%`,
       `Time: ${objective.timeRemaining}s`,
       ``,
       `Player: ${this.player.hasBall ? 'HAS BALL' : 'no ball'}`,
       `  Calling: ${this.player.isCallingForPass ? 'YES' : 'no'}`,
-      `  Charging: ${this.player.isCharging ? 'YES ' + Math.floor(this.player.getChargePercentage() * 100) + '%' : 'no'}`,
       `  Stunned: ${this.player.isStunned}`,
       ``,
-      `Ball speed: ${Math.floor(this.ball.getSpeed())}`,
-      `Ball receiver: ${this.ball.intendedReceiver ? 'set' : 'none'}`
+      `Ball speed: ${Math.floor(this.ball.getSpeed())}`
     ];
     
     this.debugText.setText(lines.join('\n'));
@@ -585,10 +594,15 @@ export class RunScene extends Phaser.Scene {
     this.teammates = [];
     
     const roles: ('defender' | 'midfielder' | 'forward')[] = ['defender', 'midfielder', 'forward'];
+    const midX = this.fieldWidth / 2;
+    const midY = this.fieldHeight / 2;
+    
+    // Kickoff positions - ALL in left half (player team's half)
+    // Spread vertically for good coverage
     const positions = [
-      { x: 150, y: this.fieldHeight / 2 - 150 },
-      { x: 350, y: this.fieldHeight / 2 },
-      { x: 500, y: this.fieldHeight / 2 + 100 }
+      { x: midX - 250, y: midY - 120 },  // Defender - back left
+      { x: midX - 180, y: midY + 80 },   // Midfielder - mid left  
+      { x: midX - 100, y: midY - 40 }    // Forward - closer to center
     ];
     
     for (let i = 0; i < Math.min(count, 3); i++) {
@@ -640,12 +654,17 @@ export class RunScene extends Phaser.Scene {
     this.enemies = [];
     
     const roles: ('defender' | 'midfielder' | 'forward')[] = ['defender', 'midfielder', 'forward'];
+    const midX = this.fieldWidth / 2;
+    const midY = this.fieldHeight / 2;
+    
+    // Kickoff positions - ALL in right half (enemy team's half)
+    // Spread vertically for good coverage
     const positions = [
-      { x: this.fieldWidth - 150, y: this.fieldHeight / 2 },
-      { x: this.fieldWidth - 350, y: this.fieldHeight / 2 - 120 },
-      { x: this.fieldWidth - 450, y: this.fieldHeight / 2 + 120 },
-      { x: this.fieldWidth - 550, y: this.fieldHeight / 2 },
-      { x: this.fieldWidth - 300, y: this.fieldHeight / 2 }
+      { x: midX + 250, y: midY },         // Defender - back center
+      { x: midX + 180, y: midY - 100 },   // Midfielder - mid right top
+      { x: midX + 100, y: midY + 60 },    // Forward - closer to center
+      { x: midX + 220, y: midY + 120 },   // Extra defender
+      { x: midX + 150, y: midY - 50 }     // Extra midfielder
     ];
     
     const moment = this.momentSystem.getCurrentMoment();
@@ -721,6 +740,9 @@ export class RunScene extends Phaser.Scene {
   private setupCollisions(): void {
     // Ball pickup by player
     this.physics.add.overlap(this.player, this.ball, () => {
+      // Block pickup during moment initialization
+      if (this.isInitializingMoment) return;
+      
       if (this.ball.isLoose && !this.player.hasBall && !this.player.isStunned) {
         // Check no-recapture window
         if (!this.ball.canBePickedUpBy(this.player)) return;
@@ -745,6 +767,9 @@ export class RunScene extends Phaser.Scene {
     // Ball pickup by teammates
     this.teammates.forEach(teammate => {
       this.physics.add.overlap(teammate, this.ball, () => {
+        // Block pickup during moment initialization
+        if (this.isInitializingMoment) return;
+        
         if (this.ball.isLoose && !teammate.hasBall && !teammate.isStunned) {
           // Check no-recapture window
           if (!this.ball.canBePickedUpBy(teammate)) return;
@@ -770,6 +795,9 @@ export class RunScene extends Phaser.Scene {
     // Ball pickup by enemies
     this.enemies.forEach(enemy => {
       this.physics.add.overlap(enemy, this.ball, () => {
+        // Block pickup during moment initialization
+        if (this.isInitializingMoment) return;
+        
         if (this.ball.isLoose && !enemy.hasBall && !enemy.isStunned) {
           // Check no-recapture window
           if (!this.ball.canBePickedUpBy(enemy)) return;
@@ -900,22 +928,35 @@ export class RunScene extends Phaser.Scene {
     });
   }
   
+  // Flag to prevent ball pickup during moment initialization
+  private isInitializingMoment: boolean = false;
+  
   private startMoment(): void {
     this.isTransitioning = false;
     this.isGoalScored = false;
     this.goalCooldownUntil = 0;
+    this.isInitializingMoment = true;  // Prevent ball pickups during setup
     this.resetMomentStats();
-    
-    this.resetPositions();
     
     const moment = this.momentSystem.getCurrentMoment();
     if (!moment) return;
     
+    // Determine who starts with ball BEFORE creating entities
+    const enemyStartsWithBall = moment.objective === 'defend' || 
+                                 moment.objective === 'survive' ||
+                                 moment.objective === 'turnover' ||
+                                 moment.objective === 'pressWin';
+    
+    // Reset all entities to kickoff positions (each team in own half)
+    this.resetToKickoffPositions(enemyStartsWithBall);
+    
+    // Create teammates and enemies with proper kickoff positions
     this.createTeammates(moment.teamSize.player - 1);
     this.createEnemies(moment.teamSize.enemy, moment.isBoss);
     this.updateEntityReferences();
     this.setupCollisions();
     
+    // Apply moment modifiers
     moment.modifiers.forEach(mod => {
       if (mod.effect === 'reducedControl') {
         this.player.stats.control *= 0.8;
@@ -925,32 +966,128 @@ export class RunScene extends Phaser.Scene {
     this.momentSystem.startMoment();
     this.upgradeSystem.resetMoment();
     
-    // Determine who starts with the ball based on objective
-    const enemyStartsWithBall = moment.objective === 'defend' || 
-                                 moment.objective === 'survive' ||
-                                 moment.objective === 'turnover' ||
-                                 moment.objective === 'pressWin';
-    
+    // === ASSIGN BALL POSSESSION ===
+    // This MUST happen after everything else is set up
     if (enemyStartsWithBall && this.enemies.length > 0) {
-      this.ball.attachTo(this.enemies[0]);
-      this.enemies[0].receiveBall();
+      // Choose a midfielder or forward to carry the ball (not the defender)
+      const carrier = this.enemies.find(e => e.role === 'midfielder' || e.role === 'forward') || this.enemies[0];
+      
+      // Clear any accidental possession first
+      this.player.hasBall = false;
+      this.teammates.forEach(t => t.hasBall = false);
+      this.enemies.forEach(e => e.hasBall = false);
+      
+      // Attach ball to enemy carrier
+      this.ball.attachTo(carrier);
+      carrier.receiveBall();
       this.ball.setLastPossessingTeam('enemy');
-      console.log(`[MOMENT] ${moment.objective}: Enemy starts with ball`);
+      
+      // Move ball to carrier's position
+      this.ball.setPosition(carrier.x + 15, carrier.y);
+      
+      console.log(`[MOMENT] ${moment.objective}: Enemy ${carrier.role} starts with ball at (${carrier.x}, ${carrier.y})`);
+      
+      // Safety assertion
+      if (this.player.hasBall || this.teammates.some(t => t.hasBall)) {
+        console.warn('[MOMENT] WARNING: Player team has ball when enemy should! Force-correcting...');
+        this.player.hasBall = false;
+        this.teammates.forEach(t => t.hasBall = false);
+      }
     } else {
+      // Clear any accidental possession first
+      this.player.hasBall = false;
+      this.teammates.forEach(t => t.hasBall = false);
+      this.enemies.forEach(e => e.hasBall = false);
+      
+      // Attach ball to player
       this.ball.attachTo(this.player);
       this.player.receiveBall();
       this.ball.setLastPossessingTeam('player');
+      
+      console.log(`[MOMENT] ${moment.objective}: Player starts with ball`);
     }
+    
+    // Allow ball pickups again after a short delay to ensure physics is settled
+    this.time.delayedCall(100, () => {
+      this.isInitializingMoment = false;
+    });
     
     this.audioSystem.playWhistle();
   }
   
-  private resetPositions(): void {
-    this.player.setPosition(200, this.fieldHeight / 2);
+  /**
+   * Reset all entities to proper kickoff positions
+   * Player team on left half, enemy team on right half
+   */
+  private resetToKickoffPositions(enemyStartsWithBall: boolean): void {
+    const midX = this.fieldWidth / 2;
+    const midY = this.fieldHeight / 2;
+    
+    // Player always in left half
+    // If enemy starts with ball, player is further back (defensive)
+    // If player starts with ball, player is at center
+    if (enemyStartsWithBall) {
+      this.player.setPosition(midX - 150, midY);  // Defensive position
+    } else {
+      this.player.setPosition(midX - 30, midY);   // Kickoff position (near center)
+    }
     this.player.setVelocity(0, 0);
     this.player.hasBall = false;
+    this.player.isStunned = false;
     
+    // Reset ball to center (it will be attached to carrier later)
     this.ball.resetToCenter();
+    this.ball.setPosition(midX, midY);
+  }
+  
+  /**
+   * Reset positions after a goal (kickoff restart)
+   * Player team gets the ball after conceding, enemy gets it after scoring
+   */
+  private resetPositions(): void {
+    const midX = this.fieldWidth / 2;
+    const midY = this.fieldHeight / 2;
+    
+    // Clear all possession first
+    this.player.hasBall = false;
+    this.teammates.forEach(t => {
+      t.hasBall = false;
+      t.setVelocity(0, 0);
+    });
+    this.enemies.forEach(e => {
+      e.hasBall = false;
+      e.setVelocity(0, 0);
+    });
+    
+    // Reset player to center of their half
+    this.player.setPosition(midX - 100, midY);
+    this.player.setVelocity(0, 0);
+    
+    // Reset teammates to their half
+    const teammatePositions = [
+      { x: midX - 200, y: midY - 100 },
+      { x: midX - 180, y: midY + 80 },
+      { x: midX - 80, y: midY - 20 }
+    ];
+    this.teammates.forEach((t, i) => {
+      const pos = teammatePositions[i] || teammatePositions[0];
+      t.setPosition(pos.x, pos.y);
+    });
+    
+    // Reset enemies to their half
+    const enemyPositions = [
+      { x: midX + 200, y: midY },
+      { x: midX + 150, y: midY - 80 },
+      { x: midX + 100, y: midY + 60 }
+    ];
+    this.enemies.forEach((e, i) => {
+      const pos = enemyPositions[i] || enemyPositions[0];
+      e.setPosition(pos.x, pos.y);
+    });
+    
+    // Reset ball to center
+    this.ball.resetToCenter();
+    this.ball.setPosition(midX, midY);
   }
   
   private resetMomentStats(): void {
