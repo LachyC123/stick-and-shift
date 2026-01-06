@@ -1,5 +1,7 @@
 // EnemyGoalkeeper entity for Stick & Shift
-// Dedicated goalkeeper that stays in ENEMY goal (left side) and blocks shots
+// Dedicated goalkeeper that defends the RIGHT goal (where PLAYER shoots)
+// Team directions: PLAYER attacks RIGHT, ENEMY attacks LEFT
+// Therefore: ENEMY GK defends RIGHT goal to stop player scoring
 // Smaller than outfield players with distinctive helmet/pads appearance
 
 import Phaser from 'phaser';
@@ -9,6 +11,11 @@ import * as TUNING from '../data/tuning';
 const GK_SCALE = 0.85;  // Smaller than outfield players
 const GK_SAVE_RADIUS = 32;  // Slightly larger collision for saves despite smaller sprite
 const GK_SPRITE_SIZE = 40;  // Base sprite size before scaling
+
+// Team direction constants (single source of truth)
+// PLAYER attacks RIGHT goal (x = fieldWidth), defends LEFT goal (x = 0)
+// ENEMY attacks LEFT goal (x = 0), defends RIGHT goal (x = fieldWidth)
+const ENEMY_DEFENDS_RIGHT = true;
 
 export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
   // References
@@ -22,12 +29,13 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
   private lungeCooldownUntil: number = 0;
   private lastReactionTime: number = 0;
   
-  // Goal area bounds (GK_BOX)
+  // Goal area bounds (GK_BOX) - positioned at RIGHT goal
   private goalY: number;
   private goalTopY: number;
   private goalBottomY: number;
   private gkBoxMinX: number;
   private gkBoxMaxX: number;
+  private goalLineX: number;  // The actual goal line X position
   
   // Stats for debug
   public saveCount: number = 0;
@@ -38,8 +46,10 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
   private idleTimer: number = 0;
   
   constructor(scene: Phaser.Scene, fieldWidth: number, fieldHeight: number) {
-    // Position at LEFT goal (ENEMY defends left side - where player shoots)
-    const startX = TUNING.GK_MIN_X + 25;
+    // Position at RIGHT goal (ENEMY GK defends where PLAYER shoots)
+    // Goal line is at fieldWidth, GK stands slightly in front
+    const goalLineX = fieldWidth - 30;  // Right goal line position
+    const startX = goalLineX - 25;      // GK starts 25px in front of goal line
     const startY = fieldHeight / 2;
     
     super(scene, startX, startY, 'enemy_gk_pro');
@@ -47,10 +57,12 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
     this.fieldWidth = fieldWidth;
     this.fieldHeight = fieldHeight;
     this.goalY = fieldHeight / 2;
+    this.goalLineX = goalLineX;
     
-    // Define GK_BOX - area where GK stays
-    this.gkBoxMinX = TUNING.GK_MIN_X;
-    this.gkBoxMaxX = TUNING.GK_MAX_X;
+    // Define GK_BOX - area where GK stays (at RIGHT goal)
+    // GK_MIN_X and GK_MAX_X are offsets from goal line, we mirror them for right side
+    this.gkBoxMaxX = goalLineX - TUNING.GK_MIN_X + 30;  // Closest to goal (max X on right side)
+    this.gkBoxMinX = goalLineX - TUNING.GK_MAX_X;       // Furthest from goal (how far GK can come out)
     this.goalTopY = this.goalY - TUNING.GOAL_MOUTH_HEIGHT / 2 - TUNING.GK_Y_MARGIN;
     this.goalBottomY = this.goalY + TUNING.GOAL_MOUTH_HEIGHT / 2 + TUNING.GK_Y_MARGIN;
     
@@ -73,7 +85,8 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
     // Start idle bounce animation
     this.startIdleAnimation(scene);
     
-    console.log(`[GK] ENEMY GK spawned at LEFT goal (x=${startX}, y=${startY}), scale=${GK_SCALE}`);
+    console.log(`[GK] ENEMY GK spawned at RIGHT goal (x=${Math.round(startX)}, y=${startY}), goalLine=${goalLineX}, scale=${GK_SCALE}`);
+    console.log(`[GK] GK_BOX: X[${Math.round(this.gkBoxMinX)}-${Math.round(this.gkBoxMaxX)}], Y[${Math.round(this.goalTopY)}-${Math.round(this.goalBottomY)}]`);
   }
   
   private createGKTexture(scene: Phaser.Scene): void {
@@ -180,7 +193,8 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
     // Get ball info
     const ballSpeed = this.ball.getSpeed();
     const ballVel = this.ball.body?.velocity || { x: 0, y: 0 };
-    const ballMovingTowardGoal = ballVel.x < -50;  // Moving left toward ENEMY goal (left side)
+    // Ball moving toward RIGHT goal = positive X velocity (player shooting at enemy GK)
+    const ballMovingTowardGoal = ballVel.x > 50;
     
     // Decide behavior
     if (this.shouldLunge(ballSpeed, ballMovingTowardGoal, now)) {
@@ -279,16 +293,18 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
     // Clamp to goal area
     targetY = Phaser.Math.Clamp(targetY, this.goalTopY, this.goalBottomY);
     
-    // Target X - stay near goal line but can come out slightly
-    let targetX = TUNING.GK_MIN_X + 15;
+    // Target X - stay near goal line (RIGHT side) but can come out slightly
+    // Default position is close to goal line (high X value)
+    let targetX = this.gkBoxMaxX - 10;
     
-    // Come out a bit if ball is close
+    // Come out a bit if ball is close and approaching from the left
     const distToBall = Phaser.Math.Distance.Between(this.x, this.y, this.ball.x, this.ball.y);
-    if (distToBall < 150 && this.ball.x < 200) {
+    if (distToBall < 150 && this.ball.x > this.fieldWidth - 250) {
+      // Ball is close to the right goal area - come out to meet it
       targetX = Phaser.Math.Clamp(
-        Phaser.Math.Linear(TUNING.GK_MIN_X, TUNING.GK_MAX_X, 1 - distToBall / 150),
-        TUNING.GK_MIN_X,
-        TUNING.GK_MAX_X
+        Phaser.Math.Linear(this.gkBoxMaxX, this.gkBoxMinX, 1 - distToBall / 150),
+        this.gkBoxMinX,
+        this.gkBoxMaxX
       );
     }
     
@@ -309,13 +325,13 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
   }
   
   private constrainPosition(): void {
-    // Keep GK strictly within GK_BOX
-    this.x = Phaser.Math.Clamp(this.x, this.gkBoxMinX, this.gkBoxMaxX + 10);
+    // Keep GK strictly within GK_BOX (right side of field)
+    this.x = Phaser.Math.Clamp(this.x, this.gkBoxMinX - 10, this.gkBoxMaxX);
     this.y = Phaser.Math.Clamp(this.y, this.goalTopY, this.goalBottomY);
   }
   
   /**
-   * Handle ball collision - deflect the ball
+   * Handle ball collision - deflect the ball away from RIGHT goal
    */
   onBallContact(ball: any): void {
     // Only deflect if ball was moving fast (a shot)
@@ -324,15 +340,17 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
     
     this.saveCount++;
     
-    // Calculate deflection direction (away from goal)
-    const deflectAngle = Math.atan2(ball.y - this.y, ball.x - this.x);
-    // Bias deflection to the sides and away from goal
-    const finalAngle = deflectAngle + (Math.random() - 0.5) * 0.8 + Math.PI * 0.3;
+    // Calculate deflection direction (away from RIGHT goal = toward LEFT)
+    // Base angle points from GK toward ball
+    const baseAngle = Math.atan2(ball.y - this.y, ball.x - this.x);
+    // Bias deflection to push ball LEFT (away from goal) with some randomness
+    // Add PI to flip direction (away from goal), then add random vertical spread
+    const deflectAngle = Math.PI + (Math.random() - 0.5) * 1.2;  // Points left with spread
     
-    // Apply deflection
+    // Apply deflection - always push ball away from goal (negative X = left)
     ball.setVelocity(
-      Math.cos(finalAngle) * TUNING.GK_DEFLECT_SPEED,
-      Math.sin(finalAngle) * TUNING.GK_DEFLECT_SPEED
+      -Math.abs(Math.cos(deflectAngle)) * TUNING.GK_DEFLECT_SPEED,  // Always negative X
+      Math.sin(deflectAngle) * TUNING.GK_DEFLECT_SPEED * 0.8       // Vertical spread
     );
     
     // Prevent ball from sticking - brief immunity
@@ -342,7 +360,7 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
     // Visual/audio feedback
     this.showSaveEffect();
     
-    console.log(`[GK] SAVE! Total: ${this.saveCount}`);
+    console.log(`[GK] SAVE at RIGHT goal! Ball deflected LEFT. Total saves: ${this.saveCount}`);
   }
   
   private showSaveEffect(): void {
@@ -396,10 +414,11 @@ export class EnemyGoalkeeper extends Phaser.Physics.Arcade.Sprite {
   }
   
   /**
-   * Reset GK to starting position
+   * Reset GK to starting position (at RIGHT goal)
    */
   reset(): void {
-    this.setPosition(TUNING.GK_MIN_X + 25, this.goalY);
+    // Reset to right goal position (goalLineX - offset)
+    this.setPosition(this.goalLineX - 25, this.goalY);
     this.setVelocity(0, 0);
     this.isLunging = false;
     this.lungeEndTime = 0;
