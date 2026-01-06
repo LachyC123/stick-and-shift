@@ -2,7 +2,8 @@
 // Each moment is a 30-60s gameplay segment with a specific objective
 
 export type MomentObjective = 'score' | 'defend' | 'survive' | 'penaltyCorner' | 
-                               'turnover' | 'reboundGoal' | 'multiGoal' | 'assist';
+                               'turnover' | 'reboundGoal' | 'multiGoal' | 'assist' |
+                               'giveAndGo' | 'possession' | 'pressWin' | 'protectInjector' | 'pcBattle';
 
 export interface MomentModifier {
   id: string;
@@ -220,6 +221,65 @@ export const MOMENTS: MomentDefinition[] = [
     difficulty: 4,
     teamSize: { player: 3, enemy: 4 },
     modifiers: [MOMENT_MODIFIERS.noSaves]
+  },
+
+  // ========== NEW MOMENT TYPES ==========
+  {
+    id: 'giveAndGo',
+    name: 'Give and Go',
+    description: 'Pass, receive, then score in one play',
+    objective: 'giveAndGo',
+    duration: 50,
+    targetScore: 1,
+    isBoss: false,
+    difficulty: 3,
+    teamSize: { player: 4, enemy: 3 },
+    modifiers: []
+  },
+  {
+    id: 'holdPossession',
+    name: 'Keep Ball',
+    description: 'Hold possession for 25 seconds total',
+    objective: 'possession',
+    duration: 50,
+    isBoss: false,
+    difficulty: 3,
+    teamSize: { player: 4, enemy: 4 },
+    modifiers: []
+  },
+  {
+    id: 'pressWin',
+    name: 'Press Win',
+    description: 'Force 2 turnovers in 40 seconds',
+    objective: 'pressWin',
+    duration: 40,
+    isBoss: false,
+    difficulty: 3,
+    teamSize: { player: 4, enemy: 3 },
+    modifiers: [MOMENT_MODIFIERS.pressIntense]
+  },
+  {
+    id: 'protectInjector',
+    name: 'Protect the Injector',
+    description: 'Survive intense pressure for 35s',
+    objective: 'survive',
+    duration: 35,
+    isBoss: false,
+    difficulty: 4,
+    teamSize: { player: 3, enemy: 5 },
+    modifiers: [MOMENT_MODIFIERS.pressIntense, MOMENT_MODIFIERS.outnumbered]
+  },
+  {
+    id: 'pcBattle',
+    name: 'PC Battle',
+    description: 'Win the penalty corner duel (score first in 3 PCs)',
+    objective: 'pcBattle',
+    duration: 60,
+    targetScore: 1,
+    isBoss: false,
+    difficulty: 3,
+    teamSize: { player: 5, enemy: 5 },
+    modifiers: []
   },
 
   // ========== BOSS MOMENTS ==========

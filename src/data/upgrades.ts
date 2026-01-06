@@ -7,7 +7,8 @@ export type UpgradeHook = 'onShot' | 'onPass' | 'onTackle' | 'onSteal' | 'onGoal
                           'onHit' | 'passive';
 export type SynergySet = 'dragFlick' | 'press' | 'trianglePassing' | 'rebound' | 'trickster' | 
                          'tank' | 'speedster' | 'vampire' | 'chaos' | 'precision' | 'guardian' | 
-                         'berserker';
+                         'berserker' | 'counterPress' | 'possession' | 'sweeper' | 'weather' | 
+                         'poacher' | 'aerial';
 
 export interface UpgradeModifier {
   stat: string;
@@ -56,7 +57,13 @@ export const SYNERGY_NAMES: Record<SynergySet, string> = {
   chaos: 'Chaos',
   precision: 'Precision',
   guardian: 'Guardian',
-  berserker: 'Berserker'
+  berserker: 'Berserker',
+  counterPress: 'Counter-Press',
+  possession: 'Possession',
+  sweeper: 'Sweeper-Keeper',
+  weather: 'Weather Master',
+  poacher: 'Poacher',
+  aerial: 'Aerial Threat'
 };
 
 export const SYNERGY_COLORS: Record<SynergySet, number> = {
@@ -71,7 +78,13 @@ export const SYNERGY_COLORS: Record<SynergySet, number> = {
   chaos: 0x9b59b6,
   precision: 0x10ac84,
   guardian: 0xf39c12,
-  berserker: 0xe74c3c
+  berserker: 0xe74c3c,
+  counterPress: 0xff7675,
+  possession: 0x74b9ff,
+  sweeper: 0x636e72,
+  weather: 0x81ecec,
+  poacher: 0xfdcb6e,
+  aerial: 0xa29bfe
 };
 
 export const UPGRADES: Upgrade[] = [
@@ -985,6 +998,825 @@ export const UPGRADES: Upgrade[] = [
     ],
     effectId: 'goldenBoost',
     icon: '🏆'
+  },
+
+  // ========== NEW UPGRADES - COUNTER-PRESS SET ==========
+  {
+    id: 'instantReaction',
+    name: 'Instant Reaction',
+    description: '+50% speed for 1.5s after losing ball',
+    rarity: 'uncommon',
+    synergies: ['counterPress', 'speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'lostBallSpeedBurst',
+    icon: '⚡'
+  },
+  {
+    id: 'packHunter',
+    name: 'Pack Hunter',
+    description: '+15% tackle success per nearby teammate',
+    rarity: 'uncommon',
+    synergies: ['counterPress', 'press'],
+    hooks: ['onTackle'],
+    modifiers: [],
+    effectId: 'packTackleBoost',
+    icon: '🐺'
+  },
+  {
+    id: 'turnoverArtist',
+    name: 'Turnover Artist',
+    description: 'Steals restore 30% stamina',
+    rarity: 'rare',
+    synergies: ['counterPress', 'vampire'],
+    hooks: ['onSteal'],
+    modifiers: [],
+    effectId: 'stealStaminaRestore',
+    icon: '🎭'
+  },
+  {
+    id: 'gegenpressing',
+    name: 'Gegenpressing',
+    description: 'Team auto-presses for 3s after turnover',
+    rarity: 'epic',
+    synergies: ['counterPress', 'press'],
+    hooks: ['onSteal'],
+    modifiers: [],
+    effectId: 'teamCounterPress',
+    icon: '🔄'
+  },
+
+  // ========== NEW UPGRADES - POSSESSION SET ==========
+  {
+    id: 'calmControl',
+    name: 'Calm Control',
+    description: '+20% control when stationary',
+    rarity: 'common',
+    synergies: ['possession'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'stationaryControl',
+    icon: '🧘',
+    maxStacks: 2
+  },
+  {
+    id: 'patientPlay',
+    name: 'Patient Play',
+    description: '+5% all stats per 5s of possession',
+    rarity: 'uncommon',
+    synergies: ['possession', 'trianglePassing'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'possessionStacking',
+    icon: '⏳'
+  },
+  {
+    id: 'keepBall',
+    name: 'Keep Ball',
+    description: 'Passes have 20% chance to reset cooldowns',
+    rarity: 'uncommon',
+    synergies: ['possession', 'trianglePassing'],
+    hooks: ['onPass'],
+    modifiers: [],
+    effectId: 'passCooldownReset',
+    icon: '🔁'
+  },
+  {
+    id: 'tikaTaka',
+    name: 'Tika-Taka',
+    description: 'Back-to-back passes increase speed by 10% each',
+    rarity: 'rare',
+    synergies: ['possession', 'speedster'],
+    hooks: ['onPass', 'onReceive'],
+    modifiers: [],
+    effectId: 'passingMomentum',
+    icon: '⚽'
+  },
+  {
+    id: 'metronome',
+    name: 'Metronome',
+    description: 'Perfect pass timing gives +50% pass power',
+    rarity: 'rare',
+    synergies: ['possession', 'precision'],
+    hooks: ['onPass'],
+    modifiers: [],
+    effectId: 'timedPassBonus',
+    icon: '🎵'
+  },
+  {
+    id: 'possessionMaster',
+    name: 'Possession Master',
+    description: 'Cannot be tackled while ball is bobbing',
+    rarity: 'epic',
+    synergies: ['possession', 'tank'],
+    hooks: ['passive'],
+    modifiers: [],
+    effectId: 'bobbleImmunity',
+    icon: '👑'
+  },
+
+  // ========== NEW UPGRADES - SWEEPER-KEEPER SET ==========
+  {
+    id: 'lastLine',
+    name: 'Last Line',
+    description: '+30% tackle range when furthest back',
+    rarity: 'uncommon',
+    synergies: ['sweeper', 'guardian'],
+    hooks: ['onTackle'],
+    modifiers: [],
+    effectId: 'lastManTackleRange',
+    icon: '🧱'
+  },
+  {
+    id: 'clearancePower',
+    name: 'Clearance Power',
+    description: '+50% pass power in own half',
+    rarity: 'common',
+    synergies: ['sweeper'],
+    hooks: ['onPass'],
+    modifiers: [],
+    effectId: 'ownHalfPassPower',
+    icon: '🦵',
+    maxStacks: 2
+  },
+  {
+    id: 'interceptor',
+    name: 'Interceptor',
+    description: '25% chance to auto-intercept nearby passes',
+    rarity: 'rare',
+    synergies: ['sweeper', 'guardian'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'autoIntercept',
+    icon: '🖐️'
+  },
+  {
+    id: 'rushOut',
+    name: 'Rush Out',
+    description: '+80% speed when ball in your D-circle',
+    rarity: 'rare',
+    synergies: ['sweeper', 'speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'dCircleRush',
+    icon: '🏃'
+  },
+  {
+    id: 'sweeperKeeper',
+    name: 'Sweeper Keeper',
+    description: 'Auto-block one shot per moment when near goal',
+    rarity: 'epic',
+    synergies: ['sweeper', 'guardian'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'autoBlockShot',
+    icon: '🧤'
+  },
+
+  // ========== NEW UPGRADES - WEATHER SET ==========
+  {
+    id: 'rainDancer',
+    name: 'Rain Dancer',
+    description: 'No control penalty on wet turf',
+    rarity: 'uncommon',
+    synergies: ['weather', 'trickster'],
+    hooks: ['passive'],
+    modifiers: [],
+    effectId: 'wetTurfImmune',
+    icon: '🌧️'
+  },
+  {
+    id: 'iceSkater',
+    name: 'Ice Skater',
+    description: '+20% speed on slippery surfaces',
+    rarity: 'uncommon',
+    synergies: ['weather', 'speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'slipSpeedBoost',
+    icon: '⛸️'
+  },
+  {
+    id: 'mudRunner',
+    name: 'Mud Runner',
+    description: 'Enemies slip 30% more often near you',
+    rarity: 'rare',
+    synergies: ['weather', 'chaos'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'enemySlipAura',
+    icon: '🦶'
+  },
+  {
+    id: 'stormChaser',
+    name: 'Storm Chaser',
+    description: '+15% all stats during weather modifiers',
+    rarity: 'rare',
+    synergies: ['weather'],
+    hooks: ['onMomentStart', 'onTick'],
+    modifiers: [],
+    effectId: 'weatherStatsBoost',
+    icon: '⛈️'
+  },
+  {
+    id: 'weatherMaster',
+    name: 'Weather Master',
+    description: 'Create slippery zone around you that affects enemies',
+    rarity: 'epic',
+    synergies: ['weather', 'chaos'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'slipZoneAura',
+    icon: '🌀'
+  },
+
+  // ========== NEW UPGRADES - POACHER SET ==========
+  {
+    id: 'boxPresence',
+    name: 'Box Presence',
+    description: '+20% shot power inside enemy D',
+    rarity: 'common',
+    synergies: ['poacher', 'dragFlick'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'enemyDShotPower',
+    icon: '📦',
+    maxStacks: 2
+  },
+  {
+    id: 'goalPoacher',
+    name: 'Goal Poacher',
+    description: '+40% speed toward loose balls in enemy D',
+    rarity: 'uncommon',
+    synergies: ['poacher', 'rebound'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'poacherSpeed',
+    icon: '🦅'
+  },
+  {
+    id: 'tapIn',
+    name: 'Tap In Specialist',
+    description: 'Shots at close range are 30% faster',
+    rarity: 'uncommon',
+    synergies: ['poacher', 'precision'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'closeRangeShotBoost',
+    icon: '👆'
+  },
+  {
+    id: 'secondBall',
+    name: 'Second Ball',
+    description: '+60% chance to reach rebounds first',
+    rarity: 'rare',
+    synergies: ['poacher', 'rebound'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'reboundPriority',
+    icon: '2️⃣'
+  },
+  {
+    id: 'finisher',
+    name: 'Clinical Finisher',
+    description: 'Goals from inside D restore all cooldowns',
+    rarity: 'rare',
+    synergies: ['poacher', 'precision'],
+    hooks: ['onGoal'],
+    modifiers: [],
+    effectId: 'dGoalCooldownReset',
+    icon: '🎯'
+  },
+  {
+    id: 'poachingInstinct',
+    name: 'Poaching Instinct',
+    description: 'Teleport to rebound position after teammate shots',
+    rarity: 'epic',
+    synergies: ['poacher', 'chaos'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'reboundTeleport',
+    icon: '✨'
+  },
+
+  // ========== NEW UPGRADES - AERIAL SET ==========
+  {
+    id: 'chipPass',
+    name: 'Chip Pass',
+    description: 'Passes can go over one defender',
+    rarity: 'uncommon',
+    synergies: ['aerial', 'trianglePassing'],
+    hooks: ['onPass'],
+    modifiers: [],
+    effectId: 'chipPassDefender',
+    icon: '🎈'
+  },
+  {
+    id: 'loftedShot',
+    name: 'Lofted Shot',
+    description: 'Hold shoot for aerial shot that dips at goal',
+    rarity: 'rare',
+    synergies: ['aerial', 'dragFlick'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'dippingShot',
+    icon: '🌈'
+  },
+  {
+    id: 'volleyMaster',
+    name: 'Volley Master',
+    description: '+40% power on first-touch shots from aerials',
+    rarity: 'rare',
+    synergies: ['aerial', 'precision'],
+    hooks: ['onReceive', 'onShot'],
+    modifiers: [],
+    effectId: 'volleyPowerBoost',
+    icon: '🦶'
+  },
+  {
+    id: 'aerialDominance',
+    name: 'Aerial Dominance',
+    description: 'Always win aerial balls',
+    rarity: 'epic',
+    synergies: ['aerial', 'tank'],
+    hooks: ['passive'],
+    modifiers: [],
+    effectId: 'winAerials',
+    icon: '🏆'
+  },
+
+  // ========== NEW UPGRADES - DRAG FLICK EXTENDED ==========
+  {
+    id: 'pcSpecialist',
+    name: 'PC Specialist',
+    description: '+30% shot power from penalty corners',
+    rarity: 'uncommon',
+    synergies: ['dragFlick'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'pcShotPower',
+    icon: '🎯'
+  },
+  {
+    id: 'lowFlick',
+    name: 'Low Flick',
+    description: 'Shots from stationary go under blockers',
+    rarity: 'rare',
+    synergies: ['dragFlick', 'precision'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'lowShotPenetration',
+    icon: '⬇️'
+  },
+  {
+    id: 'windUp',
+    name: 'Wind Up',
+    description: 'Standing still charges shot power (max +50%)',
+    rarity: 'rare',
+    synergies: ['dragFlick', 'precision'],
+    hooks: ['onTick', 'onShot'],
+    modifiers: [],
+    effectId: 'stationaryCharge',
+    icon: '🌀'
+  },
+  {
+    id: 'topCorner',
+    name: 'Top Corner',
+    description: '20% of shots become unsaveable',
+    rarity: 'epic',
+    synergies: ['dragFlick', 'precision'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'unsaveableShot',
+    icon: '📐'
+  },
+
+  // ========== NEW UPGRADES - PRESS EXTENDED ==========
+  {
+    id: 'highLine',
+    name: 'High Line',
+    description: 'Team pushes higher, +10% team speed',
+    rarity: 'uncommon',
+    synergies: ['press'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'highLineSpeed',
+    icon: '⬆️'
+  },
+  {
+    id: 'trapSetter',
+    name: 'Trap Setter',
+    description: 'Enemies near sideline lose 15% speed',
+    rarity: 'rare',
+    synergies: ['press', 'guardian'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'sidelineTrap',
+    icon: '🕸️'
+  },
+  {
+    id: 'relentless',
+    name: 'Relentless',
+    description: 'No stamina cost when pressing',
+    rarity: 'rare',
+    synergies: ['press', 'speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'freePressing',
+    icon: '♾️'
+  },
+  {
+    id: 'suffocate',
+    name: 'Suffocate',
+    description: 'Enemies with ball lose 5% control per second',
+    rarity: 'epic',
+    synergies: ['press'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'pressureControlDrain',
+    icon: '😤'
+  },
+
+  // ========== NEW UPGRADES - TRICKSTER EXTENDED ==========
+  {
+    id: 'fakeShot',
+    name: 'Fake Shot',
+    description: 'Dodge creates fake shot animation',
+    rarity: 'uncommon',
+    synergies: ['trickster'],
+    hooks: ['onDodge'],
+    modifiers: [],
+    effectId: 'dodgeFakeShot',
+    icon: '🎭'
+  },
+  {
+    id: 'nutmeg',
+    name: 'Nutmeg Master',
+    description: '15% chance to phase through tackles',
+    rarity: 'rare',
+    synergies: ['trickster', 'tank'],
+    hooks: ['passive'],
+    modifiers: [],
+    effectId: 'tacklePhase',
+    icon: '🥜'
+  },
+  {
+    id: 'stepOver',
+    name: 'Step Over',
+    description: 'Dodge confuses nearby enemies for 1s',
+    rarity: 'rare',
+    synergies: ['trickster'],
+    hooks: ['onDodge'],
+    modifiers: [],
+    effectId: 'dodgeConfuse',
+    icon: '💫'
+  },
+  {
+    id: 'elastico',
+    name: 'Elastico',
+    description: 'Double-tap dodge for quick direction change',
+    rarity: 'epic',
+    synergies: ['trickster', 'speedster'],
+    hooks: ['onDodge'],
+    modifiers: [],
+    effectId: 'doubleDodge',
+    icon: '🔀'
+  },
+
+  // ========== NEW UPGRADES - REBOUND EXTENDED ==========
+  {
+    id: 'deflectionKing',
+    name: 'Deflection King',
+    description: 'Blocked shots gain +30% power',
+    rarity: 'uncommon',
+    synergies: ['rebound'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'blockedShotPowerGain',
+    icon: '👑'
+  },
+  {
+    id: 'anticipation',
+    name: 'Anticipation',
+    description: 'See shot trajectory before it happens',
+    rarity: 'rare',
+    synergies: ['rebound', 'guardian'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'shotPrediction',
+    icon: '👁️'
+  },
+  {
+    id: 'ricochets',
+    name: 'Ricochets',
+    description: 'Shots bounce off players toward goal',
+    rarity: 'epic',
+    synergies: ['rebound', 'chaos'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'playerBounceToGoal',
+    icon: '🔄'
+  },
+
+  // ========== NEW UPGRADES - GUARDIAN EXTENDED ==========
+  {
+    id: 'goalkeeper',
+    name: 'Goalkeeper',
+    description: '+40% tackle success in own D',
+    rarity: 'uncommon',
+    synergies: ['guardian', 'sweeper'],
+    hooks: ['onTackle'],
+    modifiers: [],
+    effectId: 'ownDTackleBoost',
+    icon: '🧤'
+  },
+  {
+    id: 'shotBlocker',
+    name: 'Shot Blocker',
+    description: '+30% body size when blocking shots',
+    rarity: 'rare',
+    synergies: ['guardian', 'tank'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'enlargeForBlock',
+    icon: '🚧'
+  },
+  {
+    id: 'clearanceBot',
+    name: 'Clearance Bot',
+    description: 'Auto-clear balls in your D toward enemy half',
+    rarity: 'rare',
+    synergies: ['guardian', 'sweeper'],
+    hooks: ['onReceive'],
+    modifiers: [],
+    effectId: 'autoClearance',
+    icon: '🤖'
+  },
+
+  // ========== NEW UPGRADES - SPEEDSTER EXTENDED ==========
+  {
+    id: 'afterburner',
+    name: 'Afterburner',
+    description: '+30% speed after 2s of sprinting',
+    rarity: 'uncommon',
+    synergies: ['speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'sprintRampUp',
+    icon: '🔥'
+  },
+  {
+    id: 'quickBreak',
+    name: 'Quick Break',
+    description: '+50% speed for 3s after steals',
+    rarity: 'rare',
+    synergies: ['speedster', 'counterPress'],
+    hooks: ['onSteal'],
+    modifiers: [],
+    effectId: 'stealSpeedBurst',
+    icon: '💨'
+  },
+  {
+    id: 'breakaway',
+    name: 'Breakaway',
+    description: '+25% speed when no enemies ahead',
+    rarity: 'rare',
+    synergies: ['speedster', 'poacher'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'openFieldSpeed',
+    icon: '🏃‍♂️'
+  },
+  {
+    id: 'speedDemonMk2',
+    name: 'Speed Demon Mk2',
+    description: 'Max speed increases by 5% per moment',
+    rarity: 'epic',
+    synergies: ['speedster'],
+    hooks: ['onMomentEnd'],
+    modifiers: [],
+    effectId: 'stackingSpeed',
+    icon: '🚀'
+  },
+
+  // ========== NEW UPGRADES - TANK EXTENDED ==========
+  {
+    id: 'immovable',
+    name: 'Immovable',
+    description: '-50% knockback from all sources',
+    rarity: 'uncommon',
+    synergies: ['tank'],
+    hooks: ['onDamage'],
+    modifiers: [],
+    effectId: 'reducedKnockback',
+    icon: '🗿'
+  },
+  {
+    id: 'brickWall',
+    name: 'Brick Wall',
+    description: 'Enemies bounce off you when you have ball',
+    rarity: 'rare',
+    synergies: ['tank', 'possession'],
+    hooks: ['onDamage'],
+    modifiers: [],
+    effectId: 'tacklerBounce',
+    icon: '🧱'
+  },
+  {
+    id: 'bullRush',
+    name: 'Bull Rush',
+    description: 'Sprint through tackles with 30% chance',
+    rarity: 'rare',
+    synergies: ['tank', 'speedster'],
+    hooks: ['passive'],
+    modifiers: [],
+    effectId: 'sprintThroughTackle',
+    icon: '🐂'
+  },
+  {
+    id: 'juggernaut',
+    name: 'Juggernaut',
+    description: 'Immune to stuns while moving',
+    rarity: 'epic',
+    synergies: ['tank', 'berserker'],
+    hooks: ['passive'],
+    modifiers: [],
+    effectId: 'movingStunImmune',
+    icon: '🦏'
+  },
+
+  // ========== NEW UPGRADES - VAMPIRE EXTENDED ==========
+  {
+    id: 'lifeSteal',
+    name: 'Life Steal',
+    description: 'Tackles restore 10% stamina',
+    rarity: 'common',
+    synergies: ['vampire', 'press'],
+    hooks: ['onTackle'],
+    modifiers: [],
+    effectId: 'tackleStaminaGain',
+    icon: '🩸',
+    maxStacks: 2
+  },
+  {
+    id: 'drainTouch',
+    name: 'Drain Touch',
+    description: 'Contact with enemies drains their stamina',
+    rarity: 'rare',
+    synergies: ['vampire', 'tank'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'contactStaminaDrain',
+    icon: '✋'
+  },
+  {
+    id: 'soulSiphon',
+    name: 'Soul Siphon',
+    description: 'Goals heal 50% of missing stamina',
+    rarity: 'rare',
+    synergies: ['vampire'],
+    hooks: ['onGoal'],
+    modifiers: [],
+    effectId: 'goalStaminaHeal',
+    icon: '👻'
+  },
+  {
+    id: 'bloodlust',
+    name: 'Bloodlust',
+    description: 'Each steal increases speed by 10% (stacks 5x)',
+    rarity: 'epic',
+    synergies: ['vampire', 'berserker'],
+    hooks: ['onSteal'],
+    modifiers: [],
+    effectId: 'stealSpeedStacking',
+    icon: '🩸'
+  },
+
+  // ========== NEW UPGRADES - BERSERKER EXTENDED ==========
+  {
+    id: 'rageBuildup',
+    name: 'Rage Buildup',
+    description: '+3% power per tackle taken (max 30%)',
+    rarity: 'uncommon',
+    synergies: ['berserker'],
+    hooks: ['onDamage'],
+    modifiers: [],
+    effectId: 'damagePowerStack',
+    icon: '😠'
+  },
+  {
+    id: 'frenzy',
+    name: 'Frenzy',
+    description: '+20% attack speed when below 30% stamina',
+    rarity: 'rare',
+    synergies: ['berserker', 'speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'lowStaminaAttackSpeed',
+    icon: '🔴'
+  },
+  {
+    id: 'desperateShot',
+    name: 'Desperate Shot',
+    description: '+50% shot power when losing',
+    rarity: 'rare',
+    synergies: ['berserker', 'dragFlick'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'losingShotPower',
+    icon: '😤'
+  },
+  {
+    id: 'unhinged',
+    name: 'Unhinged',
+    description: 'Random stat boosts every 5s',
+    rarity: 'epic',
+    synergies: ['berserker', 'chaos'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'randomStatBoosts',
+    icon: '🃏'
+  },
+
+  // ========== NEW UPGRADES - CHAOS EXTENDED ==========
+  {
+    id: 'ballMagnetPlus',
+    name: 'Ball Magnet+',
+    description: 'Stronger ball attraction effect',
+    rarity: 'rare',
+    synergies: ['chaos', 'trickster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'strongBallMagnet',
+    icon: '🧲'
+  },
+  {
+    id: 'teleportBall',
+    name: 'Teleport Ball',
+    description: '10% chance passes teleport to target',
+    rarity: 'rare',
+    synergies: ['chaos', 'trianglePassing'],
+    hooks: ['onPass'],
+    modifiers: [],
+    effectId: 'instantPass',
+    icon: '✨'
+  },
+  {
+    id: 'mirrorImage',
+    name: 'Mirror Image',
+    description: 'Create decoy that confuses AI',
+    rarity: 'epic',
+    synergies: ['chaos', 'trickster'],
+    hooks: ['onDodge'],
+    modifiers: [],
+    effectId: 'createDecoy',
+    icon: '👥'
+  },
+
+  // ========== NEW UPGRADES - PRECISION EXTENDED ==========
+  {
+    id: 'perfectPass',
+    name: 'Perfect Pass',
+    description: 'Passes that hit targets exactly give +10% speed',
+    rarity: 'uncommon',
+    synergies: ['precision', 'trianglePassing'],
+    hooks: ['onPass'],
+    modifiers: [],
+    effectId: 'accuratePassBonus',
+    icon: '🎯'
+  },
+  {
+    id: 'sniper',
+    name: 'Sniper',
+    description: '+25% shot accuracy from distance',
+    rarity: 'rare',
+    synergies: ['precision', 'dragFlick'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'longRangeShotAccuracy',
+    icon: '🔭'
+  },
+  {
+    id: 'clutchPlayer',
+    name: 'Clutch Player',
+    description: '+30% all stats in final 15s',
+    rarity: 'rare',
+    synergies: ['precision'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'finalSecondsBoost',
+    icon: '⏰'
+  },
+  {
+    id: 'sureShot',
+    name: 'Sure Shot',
+    description: 'First shot after receiving is guaranteed on target',
+    rarity: 'epic',
+    synergies: ['precision', 'poacher'],
+    hooks: ['onReceive', 'onShot'],
+    modifiers: [],
+    effectId: 'firstTouchOnTarget',
+    icon: '💯'
   }
 ];
 
