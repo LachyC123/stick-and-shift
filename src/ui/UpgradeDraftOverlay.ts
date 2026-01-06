@@ -10,6 +10,7 @@ export interface UpgradeDraftConfig {
   ownedUpgradeIds: string[];
   extraChoices: number;
   rerolls: number;
+  seenUpgradeIds?: string[];  // Track upgrades player has seen before
   onSelect: (upgrade: Upgrade) => void;
   onSkip?: () => void;
 }
@@ -138,28 +139,35 @@ export class UpgradeDraftOverlay extends Phaser.GameObjects.Container {
     const totalWidth = this.currentUpgrades.length * cardWidth + (this.currentUpgrades.length - 1) * cardSpacing;
     const startX = this.scene.cameras.main.centerX - totalWidth / 2 + cardWidth / 2;
     
+    const seenIds = this.config.seenUpgradeIds || [];
+    
     this.currentUpgrades.forEach((upgrade, index) => {
+      const isNew = !seenIds.includes(upgrade.id);
       const card = new UpgradeCard(
         this.scene,
         startX + index * (cardWidth + cardSpacing),
         this.scene.cameras.main.centerY,
         upgrade,
+        isNew,
         () => this.selectUpgrade(upgrade)
       );
       card.setDepth(202);
       this.cards.push(card);
       this.add(card);
       
-      // Stagger animation
+      // Stagger pop-in animation with bounce
       card.setAlpha(0);
-      card.setScale(0.5);
+      card.setScale(0.3);
+      card.y = this.scene.cameras.main.centerY + 100;  // Start lower
+      
       this.scene.tweens.add({
         targets: card,
         alpha: 1,
         scaleX: 1,
         scaleY: 1,
-        duration: 300,
-        delay: index * 100,
+        y: this.scene.cameras.main.centerY,
+        duration: 400,
+        delay: index * 120,
         ease: 'Back.easeOut'
       });
     });
@@ -198,27 +206,76 @@ export class UpgradeDraftOverlay extends Phaser.GameObjects.Container {
   }
   
   private selectUpgrade(upgrade: Upgrade): void {
-    // Highlight selected card
+    // Highlight selected card with juicy animation
     this.cards.forEach(card => {
       if (card.upgrade.id === upgrade.id) {
+        // Selected card: big pop + glow + float up
         this.scene.tweens.add({
           targets: card,
-          scaleX: 1.2,
-          scaleY: 1.2,
-          duration: 200,
+          scaleX: 1.3,
+          scaleY: 1.3,
+          y: card.y - 30,
+          duration: 300,
           ease: 'Back.easeOut'
         });
+        
+        // Flash effect
+        card.flashSelected();
+        
+        // Camera shake for impact
+        this.scene.cameras.main.shake(100, 0.005);
+        
       } else {
+        // Non-selected cards: fade + slide down
         this.scene.tweens.add({
           targets: card,
-          alpha: 0.3,
-          duration: 200
+          alpha: 0.2,
+          y: card.y + 30,
+          scaleX: 0.9,
+          scaleY: 0.9,
+          duration: 250
+        });
+      }
+    });
+    
+    // Show "UPGRADE ADDED" toast
+    const toast = this.scene.add.text(
+      this.scene.cameras.main.centerX,
+      this.scene.cameras.main.height - 150,
+      `✨ ${upgrade.name} ADDED! ✨`,
+      {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '24px',
+        color: '#00ff00',
+        stroke: '#003300',
+        strokeThickness: 4
+      }
+    );
+    toast.setOrigin(0.5);
+    toast.setDepth(300);
+    toast.setAlpha(0);
+    toast.setScale(0.5);
+    
+    this.scene.tweens.add({
+      targets: toast,
+      alpha: 1,
+      scaleX: 1.1,
+      scaleY: 1.1,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.scene.tweens.add({
+          targets: toast,
+          scaleX: 1,
+          scaleY: 1,
+          duration: 100
         });
       }
     });
     
     // Delay then close
-    this.scene.time.delayedCall(500, () => {
+    this.scene.time.delayedCall(700, () => {
+      toast.destroy();
       this.hide();
       this.config.onSelect(upgrade);
     });
@@ -248,8 +305,9 @@ class UpgradeCard extends Phaser.GameObjects.Container {
   public upgrade: Upgrade;
   private bg: Phaser.GameObjects.Graphics;
   private glowTween?: Phaser.Tweens.Tween;
+  private flashOverlay?: Phaser.GameObjects.Graphics;
   
-  constructor(scene: Phaser.Scene, x: number, y: number, upgrade: Upgrade, onClick: () => void) {
+  constructor(scene: Phaser.Scene, x: number, y: number, upgrade: Upgrade, isNew: boolean, onClick: () => void) {
     super(scene, x, y);
     
     this.upgrade = upgrade;
@@ -287,6 +345,37 @@ class UpgradeCard extends Phaser.GameObjects.Container {
     accent.fillStyle(rarityColor, 1);
     accent.fillRoundedRect(-width / 2, -height / 2, width, 6, { tl: 12, tr: 12, bl: 0, br: 0 });
     this.add(accent);
+    
+    // "NEW!" label if first time seeing this upgrade
+    if (isNew) {
+      const newLabel = scene.add.text(width / 2 - 10, -height / 2 + 10, '✨NEW!', {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '12px',
+        color: '#ffff00',
+        stroke: '#000000',
+        strokeThickness: 2
+      });
+      newLabel.setOrigin(1, 0);
+      this.add(newLabel);
+      
+      // Pulse the NEW label
+      scene.tweens.add({
+        targets: newLabel,
+        scaleX: 1.15,
+        scaleY: 1.15,
+        duration: 500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+    }
+    
+    // Flash overlay for selection effect (initially invisible)
+    this.flashOverlay = scene.add.graphics();
+    this.flashOverlay.fillStyle(0xffffff, 1);
+    this.flashOverlay.fillRoundedRect(-width / 2, -height / 2, width, height, 12);
+    this.flashOverlay.setAlpha(0);
+    this.add(this.flashOverlay);
     
     // Icon
     const icon = scene.add.text(0, -height / 2 + 50, upgrade.icon, {
@@ -371,6 +460,22 @@ class UpgradeCard extends Phaser.GameObjects.Container {
     this.on('pointerdown', onClick);
     
     scene.add.existing(this);
+  }
+  
+  /**
+   * Flash effect when card is selected
+   */
+  flashSelected(): void {
+    if (this.flashOverlay) {
+      this.scene.tweens.add({
+        targets: this.flashOverlay,
+        alpha: 0.8,
+        duration: 100,
+        yoyo: true,
+        repeat: 1,
+        ease: 'Quad.easeOut'
+      });
+    }
   }
   
   destroy(fromScene?: boolean): void {

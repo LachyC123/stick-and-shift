@@ -178,6 +178,13 @@ export class RunScene extends Phaser.Scene {
     this.trailManager = new TrailManager(this);
     this.toastManager = new ToastManager(this);
     
+    // Listen for upgrade procs to show floating text (Juicy feedback)
+    this.upgradeSystem.on('upgradeProc', (data: { upgradeId: string; upgradeName: string; intensity: number }) => {
+      if (data.intensity >= 0.5 && this.player) {
+        this.showUpgradeProc(data.upgradeName);
+      }
+    });
+    
     (this as any).audioSystem = this.audioSystem;
     (this as any).inputSystem = this.inputSystem;
   }
@@ -1731,39 +1738,72 @@ export class RunScene extends Phaser.Scene {
     });
   }
   
+  // Goal detection debug state
+  private lastGoalCheckDebug = { side: '', crossed: false, betweenPosts: false, awarded: '' };
+  
   /**
    * Check if a goal should be scored
-   * Uses simple rule: ball center in goal mouth + not on cooldown
+   * ROBUST GEOMETRY: Uses ball center + epsilon margin for reliable detection
    */
   private checkGoal(isRightGoal: boolean): void {
-    // Skip if already scored or on cooldown
+    // Skip if already scored or on cooldown (debounce)
     if (this.isGoalScored || this.isTransitioning) return;
     if (this.time.now < this.goalCooldownUntil) return;
     
     // Ball must be loose
     if (!this.ball.isLoose) return;
     
-    // Check ball is within goal mouth Y range
+    // === ROBUST GOAL GEOMETRY (Issue B Fix) ===
+    const GOAL_EPS = 4;  // Epsilon margin for edge cases
     const goalY = this.fieldHeight / 2;
     const halfHeight = this.goalHeight / 2;
-    if (this.ball.y < goalY - halfHeight || this.ball.y > goalY + halfHeight) {
+    const ballX = this.ball.x;
+    const ballY = this.ball.y;
+    
+    // Check if ball Y is between goal posts (with epsilon)
+    const goalTopY = goalY - halfHeight - GOAL_EPS;
+    const goalBottomY = goalY + halfHeight + GOAL_EPS;
+    const betweenPosts = ballY >= goalTopY && ballY <= goalBottomY;
+    
+    if (!betweenPosts) {
       return;
     }
     
-    // Check ball crossed the goal line (using previous position)
-    const goalLineX = isRightGoal ? this.fieldWidth - TUNING.GOAL_SENSOR_DEPTH : TUNING.GOAL_SENSOR_DEPTH;
-    const crossed = isRightGoal
-      ? this.ball.crossedLine(goalLineX, 'right') || this.ball.x >= goalLineX
-      : this.ball.crossedLine(goalLineX, 'left') || this.ball.x <= goalLineX;
+    // Define goal line positions
+    // Right goal: ball must cross into the goal area (high X)
+    // Left goal: ball must cross into the goal area (low X)
+    const rightGoalLineX = this.fieldWidth - TUNING.GOAL_SENSOR_DEPTH;
+    const leftGoalLineX = TUNING.GOAL_SENSOR_DEPTH;
     
-    if (!crossed) return;
+    // Check if ball crossed the goal line (with epsilon for reliability)
+    let crossed = false;
+    if (isRightGoal) {
+      // Ball must be past the right goal line (with epsilon)
+      crossed = ballX >= rightGoalLineX - GOAL_EPS || this.ball.crossedLine(rightGoalLineX, 'right');
+    } else {
+      // Ball must be past the left goal line (with epsilon)
+      crossed = ballX <= leftGoalLineX + GOAL_EPS || this.ball.crossedLine(leftGoalLineX, 'left');
+    }
     
-    // Check minimum speed (prevents dribble-ins)
+    // Update debug state
+    this.lastGoalCheckDebug = {
+      side: isRightGoal ? 'RIGHT' : 'LEFT',
+      crossed,
+      betweenPosts,
+      awarded: ''
+    };
+    
+    if (!crossed) {
+      return;
+    }
+    
+    // Check minimum speed (prevents dribble-ins, but lower threshold)
     const speed = this.ball.getSpeed();
-    if (speed < TUNING.GOAL_MIN_SPEED) return;
+    if (speed < TUNING.GOAL_MIN_SPEED * 0.5) {  // More lenient speed check
+      return;
+    }
     
-    // === PART A FIX: ROBUST D-CIRCLE SCORING RULE ===
-    // Uses lastTouchInD tracking - ANY touch (shot/pass/dribble/receive) in attacking D counts
+    // === D-CIRCLE SCORING RULE ===
     const moment = this.momentSystem.getCurrentMoment();
     const scoringObjectives = ['score', 'multiGoal', 'reboundGoal', 'assist', 'giveAndGo', 'penaltyCorner', 'pc_score', 'pcBattle'];
     const isScoringMoment = !moment || scoringObjectives.includes(moment.objective);
@@ -1778,32 +1818,30 @@ export class RunScene extends Phaser.Scene {
     const touchInDTeam = this.ball.lastTouchInDTeam;
     const touchRecent = this.ball.isLastTouchInDRecent();
     
-    // Debug log EVERY goal attempt
-    console.log('[GOAL_CHECK]', {
-      scoringTeam,
-      lastTouchInDTeam: touchInDTeam,
-      msSinceTouch: Math.round(msSinceTouch),
-      touchKind: touchInfo.kind,
-      touchRecent,
-      isScoringMoment,
-      requireD: TUNING.REQUIRE_SHOT_FROM_D
-    });
+    // Detailed debug log
+    console.log(`[GOALCHECK] side=${isRightGoal ? 'RIGHT' : 'LEFT'} crossed=${crossed} betweenPosts=${betweenPosts} ballX=${Math.round(ballX)} ballY=${Math.round(ballY)}`);
+    console.log(`[GOALCHECK] touchTeam=${touchInDTeam} scoringTeam=${scoringTeam} touchRecent=${touchRecent} speed=${Math.round(speed)}`);
     
     if (TUNING.REQUIRE_SHOT_FROM_D && isScoringMoment) {
       // VALIDATE: scoring team must have last touched ball inside their attacking D recently
       const validTouch = touchInDTeam === scoringTeam && touchRecent;
       
       if (!validTouch) {
-        // NO GOAL - no valid touch in D
-        console.log('[GOAL_CHECK] REJECTED - must touch inside D');
+        console.log(`[GOALCHECK] REJECTED - must touch inside D. touchTeam=${touchInDTeam} needed=${scoringTeam}`);
+        this.lastGoalCheckDebug.awarded = 'REJECTED_NO_D_TOUCH';
         this.showNoGoalFeedback(isRightGoal, touchInfo.kind, msSinceTouch);
         return;
       }
-      
-      console.log('[GOAL_CHECK] ALLOWED - valid touch in D');
     }
     
-    // GOAL!
+    // GOAL AWARDED!
+    const awardedTeam = isRightGoal ? 'PLAYER' : 'ENEMY';
+    console.log(`[GOALCHECK] => GOAL AWARDED: ${awardedTeam}`);
+    this.lastGoalCheckDebug.awarded = awardedTeam;
+    
+    // Lock goal detection immediately (debounce)
+    this.goalCooldownUntil = this.time.now + TUNING.GOAL_COOLDOWN;
+    
     this.scoreGoal(isRightGoal);
   }
   
@@ -2416,8 +2454,22 @@ export class RunScene extends Phaser.Scene {
     this.ball.setPosition(safeX, this.fieldHeight / 2);
     this.ball.setVelocity(0, 0);
     
-    // Camera shake - stronger for goals
-    this.cameras.main.shake(TUNING.CAMERA_SHAKE_GOAL_DURATION, TUNING.CAMERA_SHAKE_GOAL);
+    // === JUICY GOAL EFFECTS ===
+    
+    // 1) SLOW-MO effect for 400ms
+    this.time.timeScale = 0.3;
+    this.time.delayedCall(400 / 0.3, () => {
+      this.time.timeScale = 1.0;
+    });
+    
+    // 2) Strong camera shake
+    this.cameras.main.shake(350, 0.018);
+    
+    // 3) Flash effect
+    this.cameras.main.flash(200, isPlayerGoal ? 50 : 255, isPlayerGoal ? 255 : 50, 50, true);
+    
+    // 4) Big "GOAL!" banner
+    this.showGoalBanner(isPlayerGoal);
     
     if (isPlayerGoal) {
       this.momentStats.goalsScored++;
@@ -2455,9 +2507,132 @@ export class RunScene extends Phaser.Scene {
     }
     
     // Reset after freeze period
-    this.time.delayedCall(850, () => {
+    this.time.delayedCall(1000, () => {
       this.showKickoffCountdown();
     });
+  }
+  
+  /**
+   * Show big animated GOAL banner
+   */
+  private showGoalBanner(isPlayerGoal: boolean): void {
+    const centerX = this.cameras.main.width / 2;
+    const centerY = this.cameras.main.height / 2;
+    
+    // Big GOAL text
+    const goalText = this.add.text(centerX, centerY, isPlayerGoal ? '⚽ GOAL! ⚽' : '💀 CONCEDED', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '64px',
+      color: isPlayerGoal ? '#00ff00' : '#ff4444',
+      stroke: '#000000',
+      strokeThickness: 8
+    });
+    goalText.setOrigin(0.5);
+    goalText.setScrollFactor(0);
+    goalText.setDepth(1000);
+    goalText.setScale(0);
+    
+    // Pop-in animation
+    this.tweens.add({
+      targets: goalText,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: goalText,
+          scaleX: 1,
+          scaleY: 1,
+          duration: 100,
+          ease: 'Quad.easeOut'
+        });
+      }
+    });
+    
+    // Float up and fade out
+    this.tweens.add({
+      targets: goalText,
+      y: centerY - 80,
+      alpha: 0,
+      delay: 700,
+      duration: 500,
+      ease: 'Quad.easeIn',
+      onComplete: () => goalText.destroy()
+    });
+  }
+  
+  // ========================================
+  // JUICY FEEDBACK HELPERS
+  // ========================================
+  
+  /**
+   * Show floating combat text above an entity
+   * Used for upgrades, procs, saves, crits, etc.
+   */
+  public showFloatingText(x: number, y: number, text: string, color: string = '#ffffff', size: number = 18): void {
+    const floatText = this.add.text(x, y - 20, text, {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: `${size}px`,
+      color: color,
+      stroke: '#000000',
+      strokeThickness: 3
+    });
+    floatText.setOrigin(0.5);
+    floatText.setDepth(500);
+    
+    // Pop + float up animation
+    floatText.setScale(0);
+    this.tweens.add({
+      targets: floatText,
+      scaleX: 1.1,
+      scaleY: 1.1,
+      y: y - 50,
+      duration: 150,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: floatText,
+          scaleX: 1,
+          scaleY: 1,
+          duration: 100
+        });
+      }
+    });
+    
+    this.tweens.add({
+      targets: floatText,
+      y: y - 80,
+      alpha: 0,
+      delay: 400,
+      duration: 400,
+      ease: 'Quad.easeIn',
+      onComplete: () => floatText.destroy()
+    });
+  }
+  
+  /**
+   * Global hit-stop / micro-freeze for impactful moments
+   * Briefly pauses the game for feel
+   */
+  public applyGlobalHitstop(durationMs: number = 50): void {
+    // Store original time scale
+    const originalScale = this.time.timeScale;
+    
+    // Near-freeze
+    this.time.timeScale = 0.05;
+    
+    // Resume after duration
+    this.time.delayedCall(durationMs / 0.05, () => {
+      this.time.timeScale = originalScale;
+    });
+  }
+  
+  /**
+   * Show upgrade proc feedback - icon above player + floating text
+   */
+  public showUpgradeProc(upgradeName: string, icon: string = '⬆️'): void {
+    this.showFloatingText(this.player.x, this.player.y, `${icon} ${upgradeName}`, '#ffdd00', 16);
   }
   
   private showKickoffCountdown(): void {
