@@ -168,6 +168,9 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
       case 'turnover':
         objectiveTarget = 1;  // Get 1 steal
         break;
+      case 'pressWin':
+        objectiveTarget = 2;  // Force 2 turnovers
+        break;
       case 'reboundGoal':
         objectiveTarget = 1;
         break;
@@ -295,12 +298,40 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
     this.checkCompletion();
   }
   
-  // Player got a steal/turnover
+  /**
+   * Player team got a steal/turnover
+   * Called when player or teammate takes ball from enemy via tackle or intercept
+   */
   playerStole(): void {
     if (!this.currentState || this.currentState.isComplete) return;
     
-    if (this.currentState.definition.objective === 'turnover') {
+    const objective = this.currentState.definition.objective;
+    
+    console.log(`[MOMENT] playerStole() called - objective: ${objective}, progress: ${this.currentState.objectiveProgress}/${this.currentState.objectiveTarget}`);
+    
+    if (objective === 'turnover') {
       this.currentState.objectiveProgress++;
+      console.log(`[MOMENT] Turnover progress: ${this.currentState.objectiveProgress}/${this.currentState.objectiveTarget}`);
+      
+      // Emit progress event for UI feedback
+      this.emit('objectiveProgress', {
+        objective: 'turnover',
+        progress: this.currentState.objectiveProgress,
+        target: this.currentState.objectiveTarget
+      });
+      
+      this.checkCompletion();
+    } else if (objective === 'pressWin') {
+      // pressWin also counts steals
+      this.currentState.objectiveProgress++;
+      console.log(`[MOMENT] Press win progress: ${this.currentState.objectiveProgress}/${this.currentState.objectiveTarget}`);
+      
+      this.emit('objectiveProgress', {
+        objective: 'pressWin',
+        progress: this.currentState.objectiveProgress,
+        target: this.currentState.objectiveTarget
+      });
+      
       this.checkCompletion();
     }
     
@@ -365,11 +396,28 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
         if (state.objectiveProgress >= state.objectiveTarget) {
           isComplete = true;
           isWon = true;
+          console.log('[MOMENT] Turnover objective COMPLETED - WIN!');
         }
         // Lose if time runs out
         if (state.timeRemaining <= 0) {
           isComplete = true;
           isWon = false;
+          console.log('[MOMENT] Turnover objective FAILED - time ran out');
+        }
+        break;
+        
+      case 'pressWin':
+        // Win by forcing required number of turnovers
+        if (state.objectiveProgress >= state.objectiveTarget) {
+          isComplete = true;
+          isWon = true;
+          console.log('[MOMENT] Press Win objective COMPLETED - WIN!');
+        }
+        // Lose if time runs out
+        if (state.timeRemaining <= 0) {
+          isComplete = true;
+          isWon = false;
+          console.log('[MOMENT] Press Win objective FAILED - time ran out');
         }
         break;
     }

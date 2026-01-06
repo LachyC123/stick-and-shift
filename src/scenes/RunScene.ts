@@ -370,10 +370,22 @@ export class RunScene extends Phaser.Scene {
                        this.teammates.some(t => t.hasBall) ? 'TEAMMATE' :
                        this.enemies.some(e => e.hasBall) ? 'ENEMY' : 'LOOSE';
     
+    // Get moment state for objective progress
+    const momentState = this.momentSystem.getCurrentState();
+    const momentDef = this.momentSystem.getCurrentMoment();
+    const objProgress = momentState?.objectiveProgress ?? 0;
+    const objTarget = momentState?.objectiveTarget ?? 1;
+    const objComplete = momentState?.isComplete ?? false;
+    const lastPossTeam = this.ball.lastPossessingTeam;
+    
     const lines = [
       `=== DEBUG (F1 to hide) ===`,
       `Possession: ${possession}`,
-      `Objective: ${objective.type}`,
+      `Last Poss Team: ${lastPossTeam}`,
+      ``,
+      `Objective: ${momentDef?.objective || objective.type}`,
+      `Progress: ${objProgress}/${objTarget}`,
+      `Complete: ${objComplete ? 'YES' : 'no'}`,
       `Urgency: ${(objective.urgency * 100).toFixed(0)}%`,
       `Time: ${objective.timeRemaining}s`,
       ``,
@@ -490,6 +502,9 @@ export class RunScene extends Phaser.Scene {
       this.ball.isLoose = true;
       this.ball.owner = null;
       
+      // Track player team possession
+      this.ball.setLastPossessingTeam('player');
+      
       this.momentStats.shotsTaken++;
       
       // Check if shot is on target
@@ -525,6 +540,9 @@ export class RunScene extends Phaser.Scene {
       
       // Use pass method with intended receiver for receive assist
       this.ball.pass(passSpeed, angle, this.player, intendedTarget);
+      
+      // Track player team possession
+      this.ball.setLastPossessingTeam('player');
       
       this.momentStats.passesAttempted++;
       
@@ -589,6 +607,8 @@ export class RunScene extends Phaser.Scene {
         this.ball.lastOwner = teammate;
         this.ball.isLoose = true;
         this.ball.owner = null;
+        // Track player team possession
+        this.ball.setLastPossessingTeam('player');
       };
       
       teammate.onPass = (angle, target) => {
@@ -597,6 +617,9 @@ export class RunScene extends Phaser.Scene {
         
         // Use pass method with intended receiver for receive assist
         this.ball.pass(passSpeed, angle, teammate, target);
+        
+        // Track player team possession
+        this.ball.setLastPossessingTeam('player');
         
         // Debug: show pass line
         if (this.debugDisplayEnabled && target) {
@@ -646,6 +669,8 @@ export class RunScene extends Phaser.Scene {
         this.ball.lastOwner = enemy;
         this.ball.isLoose = true;
         this.ball.owner = null;
+        // Track enemy possession for steal detection
+        this.ball.setLastPossessingTeam('enemy');
       };
       
       enemy.onPass = (angle, target) => {
@@ -654,6 +679,9 @@ export class RunScene extends Phaser.Scene {
         
         // Use pass method with intended receiver for receive assist
         this.ball.pass(passSpeed, angle, enemy, target);
+        
+        // Track enemy possession for steal detection
+        this.ball.setLastPossessingTeam('enemy');
         
         // Debug: show pass line
         if (this.debugDisplayEnabled && target) {
@@ -697,8 +725,15 @@ export class RunScene extends Phaser.Scene {
         // Check no-recapture window
         if (!this.ball.canBePickedUpBy(this.player)) return;
         
-        this.ball.attachTo(this.player);
+        // Track previous possession for steal detection
+        const prevTeam = this.ball.attachTo(this.player);
         this.player.receiveBall();
+        
+        // Check if this was a steal (interception)
+        if (this.ball.wasStolen(prevTeam, 'player')) {
+          console.log('[STEAL] Player intercepted ball from enemy');
+          this.momentSystem.playerStole();
+        }
         
         // Count as completed pass if there was an intended receiver
         if (this.ball.intendedReceiver === this.player) {
@@ -714,8 +749,15 @@ export class RunScene extends Phaser.Scene {
           // Check no-recapture window
           if (!this.ball.canBePickedUpBy(teammate)) return;
           
-          this.ball.attachTo(teammate);
+          // Track previous possession for steal detection
+          const prevTeam = this.ball.attachTo(teammate);
           teammate.receiveBall();
+          
+          // Check if this was a steal (interception by teammate)
+          if (this.ball.wasStolen(prevTeam, 'player')) {
+            console.log('[STEAL] Teammate intercepted ball from enemy');
+            this.momentSystem.playerStole();
+          }
           
           // Count as completed pass if intended receiver
           if (this.ball.intendedReceiver === teammate) {
@@ -732,6 +774,7 @@ export class RunScene extends Phaser.Scene {
           // Check no-recapture window
           if (!this.ball.canBePickedUpBy(enemy)) return;
           
+          // Track previous possession (for potential future "enemy stole" events)
           this.ball.attachTo(enemy);
           enemy.receiveBall();
         }
@@ -818,6 +861,19 @@ export class RunScene extends Phaser.Scene {
       this.handleMomentComplete(data);
     });
     
+    // Listen for objective progress (e.g., steals counting towards turnover objective)
+    this.momentSystem.on('objectiveProgress', (data: any) => {
+      if (data.objective === 'turnover' || data.objective === 'pressWin') {
+        if (data.progress >= data.target) {
+          this.toastManager.success('OBJECTIVE COMPLETE!');
+          this.audioSystem.playGoal();  // Use goal sound for celebration
+          this.cameras.main.shake(200, 0.01);
+        } else {
+          this.toastManager.success(`Steal! ${data.progress}/${data.target}`);
+        }
+      }
+    });
+    
     this.momentSystem.on('timerTick', (data: any) => {
       const state = this.momentSystem.getCurrentState();
       if (state) {
@@ -869,14 +925,21 @@ export class RunScene extends Phaser.Scene {
     this.momentSystem.startMoment();
     this.upgradeSystem.resetMoment();
     
-    if (moment.objective === 'defend' || moment.objective === 'survive') {
-      if (this.enemies.length > 0) {
-        this.ball.attachTo(this.enemies[0]);
-        this.enemies[0].receiveBall();
-      }
+    // Determine who starts with the ball based on objective
+    const enemyStartsWithBall = moment.objective === 'defend' || 
+                                 moment.objective === 'survive' ||
+                                 moment.objective === 'turnover' ||
+                                 moment.objective === 'pressWin';
+    
+    if (enemyStartsWithBall && this.enemies.length > 0) {
+      this.ball.attachTo(this.enemies[0]);
+      this.enemies[0].receiveBall();
+      this.ball.setLastPossessingTeam('enemy');
+      console.log(`[MOMENT] ${moment.objective}: Enemy starts with ball`);
     } else {
       this.ball.attachTo(this.player);
       this.player.receiveBall();
+      this.ball.setLastPossessingTeam('player');
     }
     
     this.audioSystem.playWhistle();
@@ -974,7 +1037,11 @@ export class RunScene extends Phaser.Scene {
         // 8) Sound
         this.audioSystem.playSteal();
         
-        // Stats
+        // Determine teams
+        const tacklerIsPlayerTeam = tackler === this.player || this.teammates.includes(tackler);
+        const carrierIsEnemy = this.enemies.includes(carrier);
+        
+        // Stats for player
         if (tackler === this.player) {
           this.momentStats.tacklesWon++;
           this.upgradeSystem.trigger('onSteal', {
@@ -982,9 +1049,16 @@ export class RunScene extends Phaser.Scene {
             target: carrier,
             scene: this
           });
-          
           SaveSystem.getInstance().incrementStat('totalSteals');
+        }
+        
+        // Check if this is a steal: player team tackled an enemy
+        if (tacklerIsPlayerTeam && carrierIsEnemy) {
+          console.log(`[STEAL] ${tackler === this.player ? 'Player' : 'Teammate'} tackled enemy`);
           this.momentSystem.playerStole();
+          
+          // Update ball's last possessing team
+          this.ball.setLastPossessingTeam('player');
         }
       } else {
         // Failed tackle - tackler bounces off and gets minor stun
