@@ -16,6 +16,11 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   public lastShooter: any = null;
   public isRebound: boolean = false;
   
+  // Pass targeting for assist logic
+  public intendedReceiver: any = null;
+  public passStartTime: number = 0;
+  public noRecaptureUntil: number = 0;  // Passer can't pick up until this time
+  
   // Position tracking for goal crossing detection
   public prevX: number = 0;
   public prevY: number = 0;
@@ -67,6 +72,9 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
       this.followOwner();
     } else {
       this.updatePhysics(delta);
+      
+      // Apply pass receive assist
+      this.applyReceiveAssist();
     }
     
     // Update trail
@@ -274,10 +282,15 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   }
   
   // Pass the ball (uses kick internally)
-  pass(power: number, angle: number, passer: any): void {
+  pass(power: number, angle: number, passer: any, intendedReceiver?: any): void {
     this.owner = null;
     this.lastOwner = passer;
     this.isLoose = true;
+    
+    // Set pass targeting for receive assist
+    this.intendedReceiver = intendedReceiver || null;
+    this.passStartTime = this.scene.time.now;
+    this.noRecaptureUntil = this.scene.time.now + TUNING.PASS_NO_RECAPTURE_MS;
     
     const direction = { x: Math.cos(angle), y: Math.sin(angle) };
     
@@ -289,6 +302,47 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     }
   }
   
+  /**
+   * Check if entity can pick up the ball (respects no-recapture window)
+   */
+  canBePickedUpBy(entity: any): boolean {
+    // If no-recapture is active and entity is the passer, block it
+    if (this.scene.time.now < this.noRecaptureUntil && entity === this.lastOwner) {
+      return false;
+    }
+    return true;
+  }
+  
+  /**
+   * Apply receive assist - curve ball toward intended receiver
+   * Called each frame during pass travel
+   */
+  applyReceiveAssist(): void {
+    if (!this.intendedReceiver || !this.isLoose) return;
+    
+    const timeSincePass = this.scene.time.now - this.passStartTime;
+    if (timeSincePass > TUNING.PASS_RECEIVE_ASSIST_MS) {
+      // Assist window expired
+      this.intendedReceiver = null;
+      return;
+    }
+    
+    const receiver = this.intendedReceiver;
+    const dist = Phaser.Math.Distance.Between(this.x, this.y, receiver.x, receiver.y);
+    
+    if (dist < TUNING.PASS_RECEIVE_RADIUS && dist > 10) {
+      // Curve toward receiver
+      const dx = receiver.x - this.x;
+      const dy = receiver.y - this.y;
+      const vel = this.body!.velocity;
+      
+      this.setVelocity(
+        vel.x + dx * TUNING.PASS_RECEIVE_CURVE,
+        vel.y + dy * TUNING.PASS_RECEIVE_CURVE
+      );
+    }
+  }
+  
   // Attach to new owner
   attachTo(newOwner: any): void {
     this.lastOwner = this.owner;
@@ -296,6 +350,10 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     this.isLoose = false;
     this.isRebound = false;
     this.lastShooter = null;
+    
+    // Clear pass targeting
+    this.intendedReceiver = null;
+    this.noRecaptureUntil = 0;
     
     // Reset special effects
     this.curveAmount = 0;

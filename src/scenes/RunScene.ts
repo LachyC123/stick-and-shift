@@ -378,14 +378,68 @@ export class RunScene extends Phaser.Scene {
       `Time: ${objective.timeRemaining}s`,
       ``,
       `Player: ${this.player.hasBall ? 'HAS BALL' : 'no ball'}`,
+      `  Calling: ${this.player.isCallingForPass ? 'YES' : 'no'}`,
       `  Charging: ${this.player.isCharging ? 'YES ' + Math.floor(this.player.getChargePercentage() * 100) + '%' : 'no'}`,
       `  Stunned: ${this.player.isStunned}`,
       ``,
       `Ball speed: ${Math.floor(this.ball.getSpeed())}`,
-      `Ball owner: ${this.ball.owner ? 'owned' : 'loose'}`
+      `Ball receiver: ${this.ball.intendedReceiver ? 'set' : 'none'}`
     ];
     
     this.debugText.setText(lines.join('\n'));
+    
+    // Draw "CALLING" above player when calling for pass
+    this.debugGraphics.clear();
+    if (this.player.isCallingForPass) {
+      this.debugGraphics.lineStyle(2, 0x00ff00, 1);
+      this.debugGraphics.strokeCircle(this.player.x, this.player.y, 35);
+      
+      // Draw text above player
+      const callText = this.add.text(this.player.x, this.player.y - 45, 'CALLING!', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#00ff00',
+        fontStyle: 'bold'
+      });
+      callText.setOrigin(0.5);
+      callText.setDepth(201);
+      
+      // Remove after a short time
+      this.time.delayedCall(100, () => callText.destroy());
+    }
+  }
+  
+  /**
+   * Show debug line for pass (when F1 debug is on)
+   */
+  private showPassDebugLine(from: any, to: any): void {
+    if (!this.debugDisplayEnabled) return;
+    
+    const graphics = this.add.graphics();
+    graphics.setDepth(150);
+    graphics.lineStyle(3, 0x00ff00, 0.8);
+    graphics.beginPath();
+    graphics.moveTo(from.x, from.y);
+    graphics.lineTo(to.x, to.y);
+    graphics.strokePath();
+    
+    // Arrow head
+    const angle = Math.atan2(to.y - from.y, to.x - from.x);
+    const arrowSize = 12;
+    graphics.fillStyle(0x00ff00, 0.8);
+    graphics.fillTriangle(
+      to.x, to.y,
+      to.x - Math.cos(angle - 0.4) * arrowSize, to.y - Math.sin(angle - 0.4) * arrowSize,
+      to.x - Math.cos(angle + 0.4) * arrowSize, to.y - Math.sin(angle + 0.4) * arrowSize
+    );
+    
+    // Fade out and destroy
+    this.tweens.add({
+      targets: graphics,
+      alpha: 0,
+      duration: 600,
+      onComplete: () => graphics.destroy()
+    });
   }
   
   private updateGoalSensorDebug(): void {
@@ -444,17 +498,40 @@ export class RunScene extends Phaser.Scene {
       }
     };
     
-    this.player.onPass = (angle, passSpeed) => {
+    this.player.onPass = (angle, passSpeed, targetPos) => {
       this.audioSystem.playPass();
       
-      // Use the Ball's kick method for pass
-      const direction = { x: Math.cos(angle), y: Math.sin(angle) };
-      this.ball.kick(direction, passSpeed, 0, 'pass');
-      this.ball.lastOwner = this.player;
-      this.ball.isLoose = true;
-      this.ball.owner = null;
+      // Find nearest teammate in pass direction for receive assist
+      let intendedTarget = null;
+      let bestScore = -Infinity;
+      
+      for (const t of this.teammates) {
+        const dx = t.x - this.player.x;
+        const dy = t.y - this.player.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 50 || dist > 400) continue;
+        
+        const angleToT = Math.atan2(dy, dx);
+        const angleDiff = Math.abs(Phaser.Math.Angle.Wrap(angleToT - angle));
+        
+        if (angleDiff < Math.PI / 6) {  // Within 30 degrees
+          const score = 100 - angleDiff * 50 - dist * 0.1;
+          if (score > bestScore) {
+            bestScore = score;
+            intendedTarget = t;
+          }
+        }
+      }
+      
+      // Use pass method with intended receiver for receive assist
+      this.ball.pass(passSpeed, angle, this.player, intendedTarget);
       
       this.momentStats.passesAttempted++;
+      
+      // Debug: show pass line
+      if (this.debugDisplayEnabled && intendedTarget) {
+        this.showPassDebugLine(this.player, intendedTarget);
+      }
     };
     
     this.player.onTackle = () => {
@@ -515,12 +592,16 @@ export class RunScene extends Phaser.Scene {
       };
       
       teammate.onPass = (angle, target) => {
+        this.audioSystem.playPass();
         const passSpeed = TUNING.PASS_SPEED_BASE + 5 * TUNING.PASS_SPEED_SCALE;
-        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
-        this.ball.kick(direction, passSpeed, 0, 'pass');
-        this.ball.lastOwner = teammate;
-        this.ball.isLoose = true;
-        this.ball.owner = null;
+        
+        // Use pass method with intended receiver for receive assist
+        this.ball.pass(passSpeed, angle, teammate, target);
+        
+        // Debug: show pass line
+        if (this.debugDisplayEnabled && target) {
+          this.showPassDebugLine(teammate, target);
+        }
       };
       
       teammate.onTackle = (target) => {
@@ -568,12 +649,16 @@ export class RunScene extends Phaser.Scene {
       };
       
       enemy.onPass = (angle, target) => {
+        this.audioSystem.playPass();
         const passSpeed = TUNING.PASS_SPEED_BASE + 4 * TUNING.PASS_SPEED_SCALE;
-        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
-        this.ball.kick(direction, passSpeed, 0, 'pass');
-        this.ball.lastOwner = enemy;
-        this.ball.isLoose = true;
-        this.ball.owner = null;
+        
+        // Use pass method with intended receiver for receive assist
+        this.ball.pass(passSpeed, angle, enemy, target);
+        
+        // Debug: show pass line
+        if (this.debugDisplayEnabled && target) {
+          this.showPassDebugLine(enemy, target);
+        }
       };
       
       enemy.onTackle = (target) => {
@@ -609,9 +694,16 @@ export class RunScene extends Phaser.Scene {
     // Ball pickup by player
     this.physics.add.overlap(this.player, this.ball, () => {
       if (this.ball.isLoose && !this.player.hasBall && !this.player.isStunned) {
+        // Check no-recapture window
+        if (!this.ball.canBePickedUpBy(this.player)) return;
+        
         this.ball.attachTo(this.player);
         this.player.receiveBall();
-        this.momentStats.passesCompleted++;
+        
+        // Count as completed pass if there was an intended receiver
+        if (this.ball.intendedReceiver === this.player) {
+          this.momentStats.passesCompleted++;
+        }
       }
     });
     
@@ -619,8 +711,16 @@ export class RunScene extends Phaser.Scene {
     this.teammates.forEach(teammate => {
       this.physics.add.overlap(teammate, this.ball, () => {
         if (this.ball.isLoose && !teammate.hasBall && !teammate.isStunned) {
+          // Check no-recapture window
+          if (!this.ball.canBePickedUpBy(teammate)) return;
+          
           this.ball.attachTo(teammate);
           teammate.receiveBall();
+          
+          // Count as completed pass if intended receiver
+          if (this.ball.intendedReceiver === teammate) {
+            this.momentStats.passesCompleted++;
+          }
         }
       });
     });
@@ -629,6 +729,9 @@ export class RunScene extends Phaser.Scene {
     this.enemies.forEach(enemy => {
       this.physics.add.overlap(enemy, this.ball, () => {
         if (this.ball.isLoose && !enemy.hasBall && !enemy.isStunned) {
+          // Check no-recapture window
+          if (!this.ball.canBePickedUpBy(enemy)) return;
+          
           this.ball.attachTo(enemy);
           enemy.receiveBall();
         }
