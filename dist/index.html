@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Stick & Shift - Field Hockey Roguelike</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #1a1a2e;
+    }
+    
+    #game-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    canvas {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ffffff;
+      font-family: 'Arial', sans-serif;
+      font-size: 24px;
+      text-align: center;
+    }
+    
+    .loading-bar {
+      width: 300px;
+      height: 20px;
+      background: #333;
+      border-radius: 10px;
+      margin-top: 20px;
+      overflow: hidden;
+    }
+    
+    .loading-fill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #00ff88, #00cc66);
+      border-radius: 10px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+  </style>
+  <script type="module" crossorigin src="/assets/index-COGbHCXu.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/phaser-0RJB29YE.js">
+</head>
+<body>
+  <div id="game-container">
+    <div id="loading">
+      <div>🏑 STICK & SHIFT</div>
+      <div style="font-size: 14px; margin-top: 10px;">Loading...</div>
+      <div class="loading-bar">
+        <div class="loading-fill" id="loading-fill"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
