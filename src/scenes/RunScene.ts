@@ -517,35 +517,104 @@ export class RunScene extends Phaser.Scene {
   private debugAI: boolean = false;
   private aiDebugLabels: Phaser.GameObjects.Text[] = [];
   private aiDebugText?: Phaser.GameObjects.Text;
+  private aiDebugGraphics?: Phaser.GameObjects.Graphics;
   
   private updateAIDebugOverlay(): void {
     // Clear old labels
     this.aiDebugLabels.forEach(l => l.destroy());
     this.aiDebugLabels = [];
     
+    if (!this.aiDebugGraphics) {
+      this.aiDebugGraphics = this.add.graphics();
+      this.aiDebugGraphics.setDepth(299);
+    }
+    this.aiDebugGraphics.clear();
+    
     if (!this.debugAI) {
       this.aiDebugText?.setVisible(false);
       return;
     }
     
+    // Get defense planner assignments
+    const assignments = this.aiSystem.getAllDefenseAssignments();
+    
     // Show AI state labels above each AI entity
     [...this.teammates, ...this.enemies].forEach((ai, idx) => {
-      const config = ai.aiConfig || {};
-      const state = ai.currentState || 'unknown';
-      const role = config.role || 'unknown';
       const isEnemy = this.enemies.includes(ai as any);
+      const assignment = this.aiSystem.getDefenseAssignment(ai);
       
-      const label = this.add.text(ai.x, ai.y - 40, `${role}\n${state}`, {
+      // Get role from defense planner if available, else from current state
+      let displayRole = ai.currentState || 'unknown';
+      let displayColor = isEnemy ? '#ff6666' : '#66ff66';
+      
+      if (assignment) {
+        displayRole = assignment.role;
+        
+        // Color code by defense role
+        switch (assignment.role) {
+          case 'PRIMARY_PRESSER':
+            displayColor = '#ff0000';  // Red - primary presser
+            break;
+          case 'SECOND_PRESSER':
+            displayColor = '#ff8800';  // Orange - second presser
+            break;
+          case 'SHOT_BLOCKER':
+            displayColor = '#ffff00';  // Yellow - shot blocker
+            break;
+          case 'LAST_MAN':
+            displayColor = '#00ffff';  // Cyan - last man / goalkeeper-lite
+            break;
+          case 'MARKER':
+            displayColor = '#ff00ff';  // Magenta - marker
+            break;
+        }
+        
+        // Draw line from AI to target
+        this.aiDebugGraphics!.lineStyle(2, parseInt(displayColor.replace('#', '0x')), 0.5);
+        this.aiDebugGraphics!.beginPath();
+        this.aiDebugGraphics!.moveTo(ai.x, ai.y);
+        this.aiDebugGraphics!.lineTo(assignment.target.x, assignment.target.y);
+        this.aiDebugGraphics!.strokePath();
+        
+        // Draw target circle
+        this.aiDebugGraphics!.fillStyle(parseInt(displayColor.replace('#', '0x')), 0.3);
+        this.aiDebugGraphics!.fillCircle(assignment.target.x, assignment.target.y, 10);
+        
+        // Mark commit mode
+        if (assignment.inCommitMode) {
+          displayRole += ' [COMMIT]';
+        }
+      }
+      
+      const label = this.add.text(ai.x, ai.y - 45, displayRole, {
         fontFamily: 'monospace',
-        fontSize: '9px',
-        color: isEnemy ? '#ff6666' : '#66ff66',
-        backgroundColor: '#000000aa',
-        padding: { x: 2, y: 1 },
-        align: 'center'
+        fontSize: '10px',
+        color: displayColor,
+        backgroundColor: '#000000cc',
+        padding: { x: 3, y: 2 },
+        align: 'center',
+        fontStyle: 'bold'
       });
       label.setOrigin(0.5);
       label.setDepth(300);
       this.aiDebugLabels.push(label);
+    });
+    
+    // Highlight LAST_MAN with special indicator
+    [...this.teammates, ...this.enemies].forEach(ai => {
+      const assignment = this.aiSystem.getDefenseAssignment(ai);
+      if (assignment?.role === 'LAST_MAN') {
+        this.aiDebugGraphics!.lineStyle(3, 0x00ffff, 0.8);
+        this.aiDebugGraphics!.strokeCircle(ai.x, ai.y, 30);
+        
+        // Draw goal protection arc
+        const isEnemy = this.enemies.includes(ai as any);
+        const goalX = isEnemy ? 30 : this.fieldWidth - 30;
+        this.aiDebugGraphics!.lineStyle(2, 0x00ffff, 0.3);
+        this.aiDebugGraphics!.beginPath();
+        this.aiDebugGraphics!.arc(goalX, this.fieldHeight / 2, 100, -Math.PI / 2, Math.PI / 2, !isEnemy);
+        this.aiDebugGraphics!.strokePath();
+      }
     });
     
     // Create/update summary text
@@ -640,6 +709,12 @@ export class RunScene extends Phaser.Scene {
       `Has Ball: ${playerHasBall}`,
       `In Attacking D: ${inAttackingD}`,
       `Can Shoot: ${canShoot}`,
+      '',
+      '--- HEALTH / STAMINA ---',
+      `Health: ${Math.ceil(this.player.health)}/${this.player.maxHealth}`,
+      `Stamina: ${Math.ceil(this.player.stamina)}/${this.player.maxStamina}`,
+      `Can Dash: ${this.player.canDash}`,
+      `Last Damage: ${this.player.lastDamageAmount} (${Math.round((this.time.now - this.player.lastDamageTime) / 1000)}s ago)`,
       '',
       '--- UPGRADES ---',
       `Active: ${upgrades.length}`,
@@ -1441,6 +1516,13 @@ export class RunScene extends Phaser.Scene {
         name: data.upgradeName 
       };
       this.uiSystem.showUpgradeProc(upgrade as any, data.intensity);
+      
+      // Show proc icon above player head (Part B)
+      const iconEmoji = this.getUpgradeIcon(data.upgradeId) || '⚡';
+      if (data.intensity >= 0.5) {  // Only show for meaningful procs
+        this.uiSystem.showProcIcon(iconEmoji, data.upgradeName, this.player);
+      }
+      
       console.log(`[UPGRADE_PROC] ${data.upgradeName} (intensity: ${data.intensity})`);
     });
     
@@ -1504,6 +1586,9 @@ export class RunScene extends Phaser.Scene {
     this.goalCooldownUntil = 0;
     this.isInitializingMoment = true;  // Prevent ball pickups during setup
     this.resetMomentStats();
+    
+    // Reset player health/stamina at moment start (Part C)
+    this.resetPlayerHealth();
     
     const moment = this.momentSystem.getCurrentMoment();
     if (!moment) return;
@@ -1679,6 +1764,91 @@ export class RunScene extends Phaser.Scene {
     this.lastPossessionCheck = this.time.now;
   }
   
+  // ========================================
+  // HEALTH SYSTEM INTEGRATION (Part C)
+  // ========================================
+  
+  /**
+   * Handle player death - moment fails immediately
+   */
+  private handlePlayerDeath(reason: string): void {
+    console.log(`[PLAYER_DEATH] Reason: ${reason}`);
+    
+    // Show big "INJURED" notification
+    this.toastManager.error('INJURED!', '💀 Too many tackles');
+    
+    // Camera effect
+    this.cameras.main.flash(500, 255, 0, 0);
+    
+    // Fail the moment
+    this.momentSystem.failMoment('Player overwhelmed by tackles');
+  }
+  
+  /**
+   * Reset player health at moment start
+   */
+  private resetPlayerHealth(): void {
+    this.player.resetHealth();
+    this.player.resetStamina();
+  }
+  
+  // ========================================
+  // ADVANTAGE PLAY SYSTEM (Part D)
+  // ========================================
+  
+  private advantageActive: boolean = false;
+  private advantageExpiresAt: number = 0;
+  
+  /**
+   * Trigger advantage play after clean tackle/steal
+   */
+  private triggerAdvantagePlay(): void {
+    if (this.advantageActive) return;  // Don't stack
+    
+    this.advantageActive = true;
+    this.advantageExpiresAt = this.time.now + TUNING.ADVANTAGE_DURATION;
+    
+    // Apply buffs via UpgradeSystem
+    this.upgradeSystem.addTempBuff('advantage_speed', 'speed', TUNING.ADVANTAGE_SPEED_BONUS, TUNING.ADVANTAGE_DURATION, 'play');
+    this.upgradeSystem.addTempBuff('advantage_pass', 'passPower', TUNING.ADVANTAGE_PASS_BONUS, TUNING.ADVANTAGE_DURATION, 'play');
+    this.upgradeSystem.addTempBuff('advantage_shot', 'shotPower', TUNING.ADVANTAGE_SHOT_BONUS, TUNING.ADVANTAGE_DURATION, 'play');
+    
+    // Visual feedback
+    this.toastManager.success('ADVANTAGE!', '⚡ Play on!');
+    this.audioSystem.playUpgrade();
+    
+    // Show banner
+    this.uiSystem.showPlayActive('advantage', TUNING.ADVANTAGE_DURATION);
+    
+    console.log('[ADVANTAGE] Triggered for 3 seconds');
+    
+    // Auto-expire
+    this.time.delayedCall(TUNING.ADVANTAGE_DURATION, () => {
+      this.advantageActive = false;
+      console.log('[ADVANTAGE] Expired');
+    });
+  }
+  
+  /**
+   * Get the icon emoji for an upgrade by ID (Part B)
+   */
+  private getUpgradeIcon(upgradeId: string): string {
+    const iconMap: Record<string, string> = {
+      'autoHitInD': '🎯',
+      'speedBoost': '💨',
+      'circleSpecialist': '⭕',
+      'reboundReady': '🔄',
+      'pressSpeed': '🏃',
+      'vampireTackle': '🧛',
+      'burstSpeed': '🚀',
+      'ballMagnet': '🧲',
+      'tacklePower': '💪',
+      'quickRelease': '⚡',
+      'default': '⚡'
+    };
+    return iconMap[upgradeId] || iconMap['default'];
+  }
+  
   private attemptTackle(tackler: any, target?: any): void {
     const tackleRange = TUNING.AI_TACKLE_DISTANCE + 10;
     
@@ -1761,6 +1931,23 @@ export class RunScene extends Phaser.Scene {
             time: this.time.now
           });
           SaveSystem.getInstance().incrementStat('totalSteals');
+          
+          // ADVANTAGE PLAY (Part D) - trigger buff after clean steal
+          this.triggerAdvantagePlay();
+        }
+        
+        // HEALTH SYSTEM (Part C) - Player takes damage when tackled
+        if (carrier === this.player) {
+          const damage = TUNING.TACKLE_DAMAGE_BASE;
+          const died = this.player.takeDamage(damage, 'tackle');
+          
+          console.log(`[TACKLE_DAMAGE] Player took ${damage} damage. Health: ${this.player.health}`);
+          
+          if (died) {
+            // Player died - moment fails immediately
+            this.handlePlayerDeath('tackled');
+            return;
+          }
         }
         
         // Check if this is a steal: player team tackled an enemy
@@ -2229,6 +2416,10 @@ export class RunScene extends Phaser.Scene {
     
     // Update active buffs UI
     this.updateActiveBuffsUI();
+    
+    // Update Health & Stamina HUD (Part C)
+    this.uiSystem.updateHealth(this.player.health, this.player.maxHealth);
+    this.uiSystem.updateStamina(this.player.stamina, this.player.maxStamina, this.player.canDash);
     
     // Update teammates
     this.teammates.forEach((t) => t.update(delta));

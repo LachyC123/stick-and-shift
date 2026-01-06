@@ -3,7 +3,8 @@
 
 export type MomentObjective = 'score' | 'defend' | 'survive' | 'penaltyCorner' | 
                                'turnover' | 'reboundGoal' | 'multiGoal' | 'assist' |
-                               'giveAndGo' | 'possession' | 'pressWin' | 'protectInjector' | 'pcBattle';
+                               'giveAndGo' | 'possession' | 'pressWin' | 'protectInjector' | 'pcBattle' |
+                               'pc_score' | 'pc_defend';
 
 export interface MomentModifier {
   id: string;
@@ -20,6 +21,7 @@ export interface MomentDefinition {
   duration: number;  // Seconds
   targetScore?: number;  // Goals to score
   defendScore?: number;  // Goals to prevent
+  pcAttempts?: number;  // Number of PC attempts for PC moments
   isBoss: boolean;
   bossType?: 'pressMachine' | 'pcMonster' | 'starForward' | 'rainGame';
   difficulty: 1 | 2 | 3 | 4 | 5;
@@ -276,6 +278,34 @@ export const MOMENTS: MomentDefinition[] = [
     objective: 'pcBattle',
     duration: 60,
     targetScore: 1,
+    isBoss: false,
+    difficulty: 3,
+    teamSize: { player: 5, enemy: 5 },
+    modifiers: []
+  },
+
+  // ========== PENALTY CORNER MOMENTS (Part D) ==========
+  {
+    id: 'pcScore',
+    name: 'Penalty Corner',
+    description: 'Score from a penalty corner in 3 attempts',
+    objective: 'pc_score',
+    duration: 45,
+    targetScore: 1,
+    pcAttempts: 3,
+    isBoss: false,
+    difficulty: 2,
+    teamSize: { player: 5, enemy: 5 },
+    modifiers: []
+  },
+  {
+    id: 'pcDefend',
+    name: 'Defend the PC',
+    description: 'Defend against 3 penalty corners',
+    objective: 'pc_defend',
+    duration: 45,
+    defendScore: 1,
+    pcAttempts: 3,
     isBoss: false,
     difficulty: 3,
     teamSize: { player: 5, enemy: 5 },

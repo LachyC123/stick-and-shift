@@ -26,15 +26,27 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   public isCallingForPass: boolean = false;
   private callingForPassUntil: number = 0;
   
-  // Stamina
-  public stamina: number = 100;
-  public maxStamina: number = 100;
+  // HEALTH SYSTEM (Part C)
+  public health: number = TUNING.PLAYER_MAX_HEALTH;
+  public maxHealth: number = TUNING.PLAYER_MAX_HEALTH;
+  public lastDamageTime: number = 0;
+  public lastDamageAmount: number = 0;
+  
+  // STAMINA SYSTEM (Part C)
+  public stamina: number = TUNING.PLAYER_MAX_STAMINA;
+  public maxStamina: number = TUNING.PLAYER_MAX_STAMINA;
+  public canDash: boolean = true;
   
   // Cooldowns (in ms)
   private shootCooldown: number = 0;
   private passCooldown: number = 0;
   private tackleCooldown: number = 0;
   private dodgeCooldown: number = 0;
+  
+  // Callbacks for new systems
+  public onHealthChange?: (health: number, maxHealth: number, damage: number) => void;
+  public onStaminaChange?: (stamina: number, maxStamina: number) => void;
+  public onDeath?: (reason: string) => void;
   
   // Charge shot state
   private chargeStartTime: number = 0;
@@ -441,9 +453,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // === DODGE ===
   
   private dodge(dirX: number, dirY: number): void {
+    // Check stamina before dashing (Part C)
+    if (!this.consumeStamina(TUNING.DASH_STAMINA_COST)) {
+      console.log('[STAMINA] Cannot dash - not enough stamina');
+      return;
+    }
+    
     this.isDodging = true;
     this.dodgeCooldown = TUNING.COOLDOWN_DODGE;
-    this.stamina -= 20;
     
     const len = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
     dirX /= len;
@@ -610,10 +627,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
   
   private regenerateStamina(delta: number): void {
-    if (!this.isMoving) {
-      const regenRate = 15 * (this.getModifiedStat('stamina') / 6);
-      this.stamina = Math.min(this.maxStamina, this.stamina + regenRate * (delta / 1000));
-    }
+    // Use the new stamina system (Part C)
+    this.regenStamina(delta);
   }
   
   private updateVisuals(input: InputState): void {
@@ -691,6 +706,137 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     });
   }
   
+  // ========================================
+  // HEALTH SYSTEM (Part C)
+  // ========================================
+  
+  /**
+   * Take damage from being tackled
+   * Returns true if the player died (health <= 0)
+   */
+  takeDamage(amount: number, source: string = 'tackle'): boolean {
+    // Apply any damage reduction from upgrades
+    let finalDamage = amount;
+    if (this.upgradeSystem) {
+      const reduction = this.upgradeSystem.getModifiedStat(0, 'damageReduction');
+      finalDamage = Math.max(1, amount - reduction);
+    }
+    
+    this.health = Math.max(0, this.health - finalDamage);
+    this.lastDamageTime = this.scene.time.now;
+    this.lastDamageAmount = finalDamage;
+    
+    console.log(`[HEALTH] Took ${finalDamage} damage (${source}). Health: ${this.health}/${this.maxHealth}`);
+    
+    // Visual feedback
+    this.scene.tweens.add({
+      targets: this,
+      tint: 0xff0000,
+      duration: 100,
+      yoyo: true
+    });
+    
+    // Callback
+    this.onHealthChange?.(this.health, this.maxHealth, finalDamage);
+    
+    // Check death
+    if (this.health <= 0) {
+      console.log('[HEALTH] Player DIED - moment should fail');
+      this.onDeath?.('tackled');
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /**
+   * Restore health
+   */
+  heal(amount: number): void {
+    const oldHealth = this.health;
+    this.health = Math.min(this.maxHealth, this.health + amount);
+    
+    if (this.health !== oldHealth) {
+      this.onHealthChange?.(this.health, this.maxHealth, -(this.health - oldHealth));
+    }
+  }
+  
+  /**
+   * Reset health to full (called at moment start)
+   */
+  resetHealth(): void {
+    this.health = this.maxHealth;
+    this.onHealthChange?.(this.health, this.maxHealth, 0);
+  }
+  
+  // ========================================
+  // STAMINA SYSTEM (Part C)
+  // ========================================
+  
+  /**
+   * Consume stamina for an action
+   * Returns true if consumption was successful
+   */
+  consumeStamina(amount: number): boolean {
+    if (this.stamina < amount) {
+      return false;
+    }
+    
+    this.stamina = Math.max(0, this.stamina - amount);
+    this.updateCanDash();
+    this.onStaminaChange?.(this.stamina, this.maxStamina);
+    return true;
+  }
+  
+  /**
+   * Regenerate stamina (called each frame)
+   */
+  regenStamina(delta: number): void {
+    if (this.stamina >= this.maxStamina) return;
+    if (this.isDodging) return;  // No regen while dashing
+    
+    let regenRate = TUNING.STAMINA_REGEN_PER_SEC;
+    
+    // Slower regen while holding ball
+    if (this.hasBall) {
+      regenRate *= TUNING.STAMINA_REGEN_BALL_MULT;
+    }
+    
+    const regenAmount = regenRate * (delta / 1000);
+    this.stamina = Math.min(this.maxStamina, this.stamina + regenAmount);
+    this.updateCanDash();
+    this.onStaminaChange?.(this.stamina, this.maxStamina);
+  }
+  
+  /**
+   * Update whether dash is available
+   */
+  private updateCanDash(): void {
+    this.canDash = this.stamina >= TUNING.DASH_STAMINA_COST;
+  }
+  
+  /**
+   * Restore stamina
+   */
+  restoreStamina(amount: number): void {
+    const oldStamina = this.stamina;
+    this.stamina = Math.min(this.maxStamina, this.stamina + amount);
+    this.updateCanDash();
+    
+    if (this.stamina !== oldStamina) {
+      this.onStaminaChange?.(this.stamina, this.maxStamina);
+    }
+  }
+  
+  /**
+   * Reset stamina to full
+   */
+  resetStamina(): void {
+    this.stamina = this.maxStamina;
+    this.updateCanDash();
+    this.onStaminaChange?.(this.stamina, this.maxStamina);
+  }
+  
   applyHitstop(duration: number): void {
     this.isHitstop = true;
     this.scene.time.delayedCall(duration, () => {
@@ -705,10 +851,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       vel.x + (dirX / len) * force,
       vel.y + (dirY / len) * force
     );
-  }
-  
-  restoreStamina(amount: number): void {
-    this.stamina = Math.min(this.maxStamina, this.stamina + amount);
   }
   
   addShield(duration: number): void {
