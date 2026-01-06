@@ -367,6 +367,17 @@ export const UPGRADES: Upgrade[] = [
     icon: '⭕'
   },
   {
+    id: 'autoHitInD',
+    name: 'Auto Hit in D',
+    description: 'Automatically shoot when in the D with ball',
+    rarity: 'rare',
+    synergies: ['dragFlick', 'precision', 'poacher'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'autoHitInD',
+    icon: '🎯'
+  },
+  {
     id: 'pressureCooker',
     name: 'Pressure Cooker',
     description: '+20% tackle range when pressing',

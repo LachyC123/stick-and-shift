@@ -1,33 +1,42 @@
 // UpgradeSystem for Stick & Shift
-// Manages upgrade effects with event hooks, synergies, buffs, and validation
-// SINGLE SOURCE OF TRUTH for all gameplay modifiers
+// COMPLETE OVERHAUL: Provable upgrade triggering with debug stats
+// Single source of truth for all upgrade effects
 
 import Phaser from 'phaser';
 import { Upgrade, UpgradeHook, SynergySet, UPGRADES, getUpgradeById, Rarity, SYNERGY_NAMES } from '../data/upgrades';
 import { CharacterStats } from '../data/characters';
 
+// ========================================
+// TYPES
+// ========================================
+
 export interface UpgradeContext {
   player: any;
   ball?: any;
   target?: any;
-  damage?: number;
-  position?: { x: number; y: number };
   scene: Phaser.Scene;
-  // Additional context
-  isRebound?: boolean;
-  justReceived?: boolean;
-  isStationary?: boolean;
-  isInCircle?: boolean;
-  isLosing?: boolean;
+  time?: number;
+  delta?: number;
+  position?: { x: number; y: number };
+  // Computed state (set by RunScene)
+  playerHasBall?: boolean;
+  playerInAttackingD?: boolean;
+  playerInDefendingD?: boolean;
+  playerCanShoot?: boolean;
+  playerCanPass?: boolean;
+  playerIsStationary?: boolean;
   momentTimeRemaining?: number;
+  isLosing?: boolean;
   possessionTime?: number;
 }
 
-export interface UpgradeEffect {
-  upgradeId: string;
-  upgradeName: string;
-  hook: UpgradeHook;
-  callback: (context: UpgradeContext) => void;
+// Legacy types for BuildScreenOverlay compatibility
+export interface SynergyStatus {
+  synergy: SynergySet;
+  name: string;
+  count: number;
+  tier: number;
+  active: boolean;
 }
 
 export interface ProcStats {
@@ -41,221 +50,120 @@ export interface ActiveBuff {
   id: string;
   name: string;
   icon: string;
-  stat?: string;
+  stat: string;
   value: number;
   expiresAt: number;
   source: 'upgrade' | 'synergy' | 'play' | 'giveAndGo' | 'curse';
 }
 
-export interface SynergyStatus {
-  synergy: SynergySet;
-  name: string;
-  count: number;
-  tier: 0 | 1 | 2;  // 0 = inactive, 1 = 3+, 2 = 5+
-  active: boolean;
+export interface ProcRecord {
+  upgradeId: string;
+  upgradeName: string;
+  time: number;
 }
 
-// Synergy effects - what happens when you reach Tier 1 (3) or Tier 2 (5)
-const SYNERGY_EFFECTS: Record<SynergySet, { tier1: { stat: string; value: number }[]; tier2: { stat: string; value: number }[] }> = {
-  press: {
-    tier1: [{ stat: 'tackle', value: 20 }, { stat: 'speed', value: 10 }],
-    tier2: [{ stat: 'tackle', value: 40 }, { stat: 'speed', value: 20 }, { stat: 'stamina', value: 15 }]
-  },
-  trianglePassing: {
-    tier1: [{ stat: 'passPower', value: 25 }, { stat: 'control', value: 15 }],
-    tier2: [{ stat: 'passPower', value: 50 }, { stat: 'control', value: 30 }, { stat: 'giveAndGoBonus', value: 100 }]
-  },
-  dragFlick: {
-    tier1: [{ stat: 'shotPower', value: 25 }],
-    tier2: [{ stat: 'shotPower', value: 50 }, { stat: 'shotAccuracy', value: 20 }]
-  },
-  rebound: {
-    tier1: [{ stat: 'reboundSpeed', value: 30 }, { stat: 'reboundPower', value: 20 }],
-    tier2: [{ stat: 'reboundSpeed', value: 60 }, { stat: 'reboundPower', value: 40 }]
-  },
-  trickster: {
-    tier1: [{ stat: 'dodge', value: 20 }, { stat: 'control', value: 15 }],
-    tier2: [{ stat: 'dodge', value: 40 }, { stat: 'control', value: 30 }, { stat: 'dodgeCharges', value: 1 }]
-  },
-  sweeper: {
-    tier1: [{ stat: 'tackleRange', value: 20 }, { stat: 'clearancePower', value: 25 }],
-    tier2: [{ stat: 'tackleRange', value: 40 }, { stat: 'clearancePower', value: 50 }]
-  },
-  tank: {
-    tier1: [{ stat: 'knockbackResist', value: 30 }, { stat: 'stunResist', value: 20 }],
-    tier2: [{ stat: 'knockbackResist', value: 60 }, { stat: 'stunResist', value: 40 }]
-  },
-  speedster: {
-    tier1: [{ stat: 'speed', value: 15 }, { stat: 'acceleration', value: 20 }],
-    tier2: [{ stat: 'speed', value: 30 }, { stat: 'acceleration', value: 40 }]
-  },
-  vampire: {
-    tier1: [{ stat: 'staminaOnSteal', value: 15 }],
-    tier2: [{ stat: 'staminaOnSteal', value: 30 }, { stat: 'staminaOnGoal', value: 50 }]
-  },
-  chaos: {
-    tier1: [{ stat: 'chaosProcChance', value: 20 }],
-    tier2: [{ stat: 'chaosProcChance', value: 40 }]
-  },
-  precision: {
-    tier1: [{ stat: 'shotAccuracy', value: 20 }, { stat: 'passAccuracy', value: 15 }],
-    tier2: [{ stat: 'shotAccuracy', value: 40 }, { stat: 'passAccuracy', value: 30 }]
-  },
-  guardian: {
-    tier1: [{ stat: 'blockChance', value: 15 }],
-    tier2: [{ stat: 'blockChance', value: 30 }, { stat: 'autoBlockPerMoment', value: 1 }]
-  },
-  berserker: {
-    tier1: [{ stat: 'lowHealthBonus', value: 25 }],
-    tier2: [{ stat: 'lowHealthBonus', value: 50 }]
-  },
-  counterPress: {
-    tier1: [{ stat: 'turnoverSpeedBoost', value: 30 }],
-    tier2: [{ stat: 'turnoverSpeedBoost', value: 60 }, { stat: 'turnoverTackleBoost', value: 30 }]
-  },
-  possession: {
-    tier1: [{ stat: 'possessionControl', value: 20 }],
-    tier2: [{ stat: 'possessionControl', value: 40 }, { stat: 'safePassBonus', value: 25 }]
-  },
-  weather: {
-    tier1: [{ stat: 'weatherResist', value: 50 }],
-    tier2: [{ stat: 'weatherResist', value: 100 }, { stat: 'enemySlipChance', value: 20 }]
-  },
-  poacher: {
-    tier1: [{ stat: 'circleSpeed', value: 25 }, { stat: 'circleShotPower', value: 20 }],
-    tier2: [{ stat: 'circleSpeed', value: 50 }, { stat: 'circleShotPower', value: 40 }]
-  },
-  aerial: {
-    tier1: [{ stat: 'aerialControl', value: 30 }],
-    tier2: [{ stat: 'aerialControl', value: 60 }, { stat: 'lobPassSpeed', value: 25 }]
-  }
-};
+export interface EventStats {
+  tick: number;
+  shot: number;
+  pass: number;
+  tackle: number;
+  steal: number;
+  receive: number;
+  goal: number;
+  dodge: number;
+  momentStart: number;
+  momentEnd: number;
+}
+
+// ========================================
+// UPGRADE SYSTEM CLASS
+// ========================================
 
 export class UpgradeSystem extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene;
+  
+  // Active upgrades
   private ownedUpgrades: Upgrade[] = [];
-  private effects: Map<UpgradeHook, UpgradeEffect[]> = new Map();
+  
+  // Hooks: Map<eventName, Array<{upgradeId, callback}>>
+  private hooks: Map<string, Array<{ upgradeId: string; upgradeName: string; callback: (ctx: UpgradeContext) => void }>> = new Map();
+  
+  // Stat modifiers (permanent from upgrades)
   private statModifiers: Map<string, number> = new Map();
+  
+  // Temporary buffs
   private activeBuffs: ActiveBuff[] = [];
+  
+  // Synergies
   private synergyCounts: Map<SynergySet, number> = new Map();
   private activeSynergyTiers: Map<SynergySet, number> = new Map();
   
-  // Stacking upgrades
-  private stacks: Map<string, number> = new Map();
-  private cooldowns: Map<string, number> = new Map();
-  private oneTimeUsed: Set<string> = new Set();
-  
   // Proc tracking
   private procCounts: Map<string, number> = new Map();
-  private lastProcTime: Map<string, number> = new Map();
-  private recentProcs: { upgradeId: string; name: string; time: number }[] = [];
-  private readonly PROC_COOLDOWN = 150;
+  private recentProcs: ProcRecord[] = [];
   private readonly MAX_RECENT_PROCS = 10;
+  
+  // Debug: event counters (reset each second)
+  private eventStats: EventStats = { tick: 0, shot: 0, pass: 0, tackle: 0, steal: 0, receive: 0, goal: 0, dodge: 0, momentStart: 0, momentEnd: 0 };
+  private lastEventStatsReset: number = 0;
+  private eventStatsPerSecond: EventStats = { tick: 0, shot: 0, pass: 0, tackle: 0, steal: 0, receive: 0, goal: 0, dodge: 0, momentStart: 0, momentEnd: 0 };
+  
+  // Internal cooldowns for upgrades that need them
+  private upgradeCooldowns: Map<string, number> = new Map();
+  
+  // Stacks for stackable effects
+  private stacks: Map<string, number> = new Map();
+  
+  // One-time effects tracker
+  private oneTimeUsed: Set<string> = new Set();
   
   // Give-and-Go tracking
   private lastPassTime: number = 0;
   private lastPassTarget: any = null;
-  private giveAndGoActive: boolean = false;
-  private giveAndGoExpiresAt: number = 0;
   
   // Play calling
   private activePlay: 'press' | 'hold' | 'counter' | null = null;
   private playExpiresAt: number = 0;
   private playCooldownUntil: number = 0;
   
-  // Validation results
-  private static validatedUpgrades: Set<string> = new Set();
-  private static invalidUpgrades: Set<string> = new Set();
-  private static validationRan: boolean = false;
-  
   constructor(scene: Phaser.Scene) {
     super();
     this.scene = scene;
     this.initializeHooks();
-    
-    // Run validation once
-    if (!UpgradeSystem.validationRan) {
-      this.validateAllUpgrades();
-    }
+    console.log('[UPGRADE_SYSTEM] Initialized');
   }
   
   private initializeHooks(): void {
-    const hooks: UpgradeHook[] = [
-      'onShot', 'onPass', 'onTackle', 'onSteal', 'onGoal', 'onReceive',
-      'onDodge', 'onTick', 'onMomentStart', 'onMomentEnd', 'onDamage', 'onHit', 'passive'
-    ];
-    hooks.forEach(hook => this.effects.set(hook, []));
-  }
-  
-  // ========================================
-  // VALIDATION AUDIT
-  // ========================================
-  
-  private validateAllUpgrades(): void {
-    console.log('[UPGRADE_AUDIT] Validating all upgrades...');
-    let validCount = 0;
-    let invalidCount = 0;
-    
-    for (const upgrade of UPGRADES) {
-      const hasModifiers = upgrade.modifiers.length > 0;
-      const hasHooks = upgrade.hooks.length > 0 && upgrade.hooks.some(h => h !== 'passive');
-      const hasPassiveEffect = this.hasRealPassiveEffect(upgrade);
-      
-      if (hasModifiers || hasHooks || hasPassiveEffect) {
-        UpgradeSystem.validatedUpgrades.add(upgrade.id);
-        validCount++;
-      } else {
-        UpgradeSystem.invalidUpgrades.add(upgrade.id);
-        console.error(`[UPGRADE_AUDIT] INVALID: ${upgrade.id} (${upgrade.name}) - No real effect!`);
-        invalidCount++;
-      }
-    }
-    
-    console.log(`[UPGRADE_AUDIT] Complete: ${validCount} valid, ${invalidCount} invalid`);
-    UpgradeSystem.validationRan = true;
-  }
-  
-  private hasRealPassiveEffect(upgrade: Upgrade): boolean {
-    // Check if effectId maps to a real effect
-    const passiveEffects = [
-      'speedBoost10', 'shotPowerBoost15', 'controlBoost15', 'tackleBoost15', 'passBoost15',
-      'staminaBoost20', 'dodgeBoost10', 'reducedCooldowns', 'knockbackImmune', 'unlimitedStamina',
-      'goldenBoost', 'speedControl', 'tripleDodge', 'stunCap', 'wetTurfImmune', 'winAerials',
-      'tacklePhase', 'sprintThroughTackle', 'movingStunImmune', 'bobbleImmunity'
-    ];
-    return passiveEffects.includes(upgrade.effectId) || upgrade.modifiers.length > 0;
-  }
-  
-  static isUpgradeValid(upgradeId: string): boolean {
-    return UpgradeSystem.validatedUpgrades.has(upgradeId) && !UpgradeSystem.invalidUpgrades.has(upgradeId);
+    const eventNames = ['tick', 'shot', 'pass', 'tackle', 'steal', 'receive', 'goal', 'dodge', 'momentStart', 'momentEnd'];
+    eventNames.forEach(name => this.hooks.set(name, []));
   }
   
   // ========================================
   // UPGRADE MANAGEMENT
   // ========================================
   
-  addUpgrade(upgrade: Upgrade): void {
-    console.log(`[UPGRADE_PICK] Adding: ${upgrade.id} - ${upgrade.name}`);
+  pickUpgrade(upgradeId: string): boolean {
+    const upgrade = getUpgradeById(upgradeId);
+    if (!upgrade) {
+      console.error(`[UPGRADE_SYSTEM] Upgrade not found: ${upgradeId}`);
+      return false;
+    }
+    
+    console.log(`[UPGRADE_PICK] Picking: ${upgrade.id} - ${upgrade.name}`);
     
     this.ownedUpgrades.push(upgrade);
     
-    // Apply passive modifiers immediately
+    // Apply stat modifiers
     upgrade.modifiers.forEach(mod => {
       const current = this.statModifiers.get(mod.stat) || 0;
       this.statModifiers.set(mod.stat, current + mod.value);
-      console.log(`[UPGRADE_PICK] Modifier: ${mod.stat} += ${mod.value}${mod.isPercent ? '%' : ''}`);
+      console.log(`[UPGRADE_PICK] Modifier: ${mod.stat} += ${mod.value}%`);
     });
     
-    // Register effect handlers for hooks
-    upgrade.hooks.forEach(hook => {
-      const effect = this.createEffect(upgrade, hook);
-      if (effect) {
-        this.effects.get(hook)?.push(effect);
-        console.log(`[UPGRADE_PICK] Registered hook: ${hook}`);
-      }
-    });
+    // Register hooks
+    this.registerUpgradeHooks(upgrade);
     
-    // Update synergy counts
+    // Update synergies
     upgrade.synergies.forEach(synergy => {
       const count = (this.synergyCounts.get(synergy) || 0) + 1;
       this.synergyCounts.set(synergy, count);
@@ -263,585 +171,420 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
     });
     
     this.emit('upgradeAdded', upgrade);
+    console.log(`[UPGRADE_PICK] Total upgrades: ${this.ownedUpgrades.length}`);
+    
+    return true;
   }
   
-  private checkSynergyActivation(synergy: SynergySet, count: number): void {
-    const prevTier = this.activeSynergyTiers.get(synergy) || 0;
-    let newTier = 0;
-    
-    if (count >= 5) newTier = 2;
-    else if (count >= 3) newTier = 1;
-    
-    if (newTier > prevTier) {
-      this.activeSynergyTiers.set(synergy, newTier);
-      this.applySynergyBonus(synergy, newTier);
-      this.emit('synergyActivated', { synergy, tier: newTier, name: SYNERGY_NAMES[synergy] });
-      console.log(`[SYNERGY] ${SYNERGY_NAMES[synergy]} Tier ${newTier} activated!`);
-    }
+  // Legacy method - calls pickUpgrade
+  addUpgrade(upgrade: Upgrade): void {
+    this.pickUpgrade(upgrade.id);
   }
   
-  private applySynergyBonus(synergy: SynergySet, tier: number): void {
-    const effects = SYNERGY_EFFECTS[synergy];
-    if (!effects) return;
+  private registerUpgradeHooks(upgrade: Upgrade): void {
+    // Map hooks to event names
+    const hookToEvent: Record<string, string> = {
+      'onShot': 'shot',
+      'onPass': 'pass',
+      'onTackle': 'tackle',
+      'onSteal': 'steal',
+      'onReceive': 'receive',
+      'onGoal': 'goal',
+      'onDodge': 'dodge',
+      'onTick': 'tick',
+      'onMomentStart': 'momentStart',
+      'onMomentEnd': 'momentEnd',
+      'passive': 'tick'  // Passive effects run on tick
+    };
     
-    const bonuses = tier === 2 ? effects.tier2 : effects.tier1;
-    bonuses.forEach(bonus => {
-      const current = this.statModifiers.get(bonus.stat) || 0;
-      this.statModifiers.set(bonus.stat, current + bonus.value);
+    upgrade.hooks.forEach(hook => {
+      const eventName = hookToEvent[hook];
+      if (!eventName) return;
+      
+      const callback = this.createCallback(upgrade);
+      const hookArray = this.hooks.get(eventName);
+      if (hookArray) {
+        hookArray.push({
+          upgradeId: upgrade.id,
+          upgradeName: upgrade.name,
+          callback
+        });
+        console.log(`[UPGRADE_PICK] Registered hook: ${upgrade.id} -> ${eventName}`);
+      }
     });
   }
   
-  addModifier(mod: { stat: string; type?: 'add' | 'multiply'; value: number; isPercent?: boolean }): void {
-    const current = this.statModifiers.get(mod.stat) || 0;
-    this.statModifiers.set(mod.stat, current + mod.value);
-    console.log(`[UPGRADE] Added modifier: ${mod.stat} += ${mod.value}${mod.isPercent ? '%' : ''}`);
-  }
+  // ========================================
+  // EVENT EMISSION - THE CORE
+  // ========================================
   
-  addHook(hookDef: { event: string; effect: (ctx: any) => void }): void {
-    const hookEvent = hookDef.event as UpgradeHook;
-    const effects = this.effects.get(hookEvent);
-    if (effects) {
-      effects.push({
-        upgradeId: 'external_' + hookEvent,
-        upgradeName: 'External Effect',
-        hook: hookEvent,
-        callback: hookDef.effect
-      });
+  emitEvent(eventName: string, context: UpgradeContext): void {
+    // Track event stats
+    if (eventName in this.eventStats) {
+      (this.eventStats as any)[eventName]++;
     }
-  }
-  
-  // ========================================
-  // EFFECT CREATION - ALL EFFECTS MUST DO SOMETHING
-  // ========================================
-  
-  private createEffect(upgrade: Upgrade, hook: UpgradeHook): UpgradeEffect | null {
-    const callback = this.getEffectCallback(upgrade.effectId, upgrade.id);
     
-    return {
-      upgradeId: upgrade.id,
-      upgradeName: upgrade.name,
-      hook,
-      callback
-    };
-  }
-  
-  private getEffectCallback(effectId: string, upgradeId: string): (ctx: UpgradeContext) => void {
-    // All effects must have REAL implementations
-    const callbacks: Record<string, (ctx: UpgradeContext) => void> = {
-      // === SPEED EFFECTS ===
-      speedBoost10: () => {}, // Handled by modifiers
-      openSpaceSpeed: (ctx) => {
-        if (ctx.player && this.isInOpenSpace(ctx.player, ctx.scene)) {
-          this.addTempBuff('openSpaceSpeed', 'speed', 10, 200, 'upgrade');
-          this.procUpgrade(upgradeId, 0.3);
-        }
-      },
-      pressSpeed: (ctx) => {
-        if (ctx.player && !ctx.player.hasBall) {
-          this.addTempBuff('pressSpeed', 'speed', 5, 200, 'upgrade');
-          this.procUpgrade(upgradeId, 0.2);
-        }
-      },
-      dodgeSpeedBurst: (ctx) => {
-        this.addTempBuff('dodgeSpeedBurst', 'speed', 15, 2000, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      homeHalfSpeed: (ctx) => {
-        if (ctx.position && ctx.position.x < 600) {
-          this.addTempBuff('homeHalfSpeed', 'speed', 8, 200, 'upgrade');
-          this.procUpgrade(upgradeId, 0.2);
-        }
-      },
-      
-      // === SHOT EFFECTS ===
-      shotPowerBoost15: () => {}, // Handled by modifiers
-      circleShotBoost: (ctx) => {
-        if (ctx.isInCircle) {
-          this.addTempBuff('circleShotBoost', 'shotPower', 30, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      reboundShotPower: (ctx) => {
-        if (ctx.isRebound) {
-          this.addTempBuff('reboundShotPower', 'shotPower', 20, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      stationaryShotBoost: (ctx) => {
-        if (ctx.isStationary) {
-          this.addTempBuff('stationaryShotBoost', 'shotPower', 50, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      chargeShot: () => {}, // Handled in Player.shoot
-      curvingShot: (ctx) => {
-        ctx.ball?.addCurve?.(0.3);
-        this.procUpgrade(upgradeId, 0.8);
-      },
-      splitShot: (ctx) => {
-        this.emit('createSplitShot', ctx);
-        this.procUpgrade(upgradeId, 1);
-      },
-      unmarkedShotBoost: (ctx) => {
-        if (this.isInOpenSpace(ctx.player, ctx.scene)) {
-          this.addTempBuff('unmarkedShotBoost', 'shotAccuracy', 20, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 0.8);
-        }
-      },
-      enemyDShotPower: (ctx) => {
-        if (ctx.position && ctx.position.x > 950) {
-          this.addTempBuff('enemyDShotPower', 'shotPower', 20, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      closeRangeShotBoost: (ctx) => {
-        // Close range = within 150px of goal
-        if (ctx.position && (ctx.position.x < 100 || ctx.position.x > 1100)) {
-          this.addTempBuff('closeRangeShotBoost', 'shotSpeed', 30, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      losingShotPower: (ctx) => {
-        if (ctx.isLosing) {
-          this.addTempBuff('losingShotPower', 'shotPower', 50, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      pcShotPower: (ctx) => {
-        // PC shots - handled contextually
-        this.addTempBuff('pcShotPower', 'shotPower', 30, 500, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      
-      // === PASS EFFECTS ===
-      passBoost15: () => {}, // Handled by modifiers
-      trianglePassBoost: (ctx) => {
-        if (this.checkTriangleFormation(ctx)) {
-          this.addTempBuff('trianglePassBoost', 'passPower', 25, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      fastPass: (ctx) => {
-        this.addTempBuff('fastPass', 'passSpeed', 30, 500, 'upgrade');
-        this.procUpgrade(upgradeId, 0.6);
-      },
-      boomerangPass: (ctx) => {
-        ctx.ball?.setBoomerang?.(true);
-        this.procUpgrade(upgradeId, 1);
-      },
-      predictivePass: (ctx) => {
-        ctx.ball?.setPredictive?.(true);
-        this.procUpgrade(upgradeId, 0.7);
-      },
-      oneTouchPass: (ctx) => {
-        if (ctx.justReceived) {
-          this.addTempBuff('oneTouchPass', 'passPower', 30, 1000, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      lobPass: (ctx) => {
-        ctx.ball?.setAerial?.(true);
-        this.procUpgrade(upgradeId, 0.8);
-      },
-      ownHalfPassPower: (ctx) => {
-        if (ctx.position && ctx.position.x < 600) {
-          this.addTempBuff('ownHalfPassPower', 'passPower', 50, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 0.7);
-        }
-      },
-      
-      // === TACKLE EFFECTS ===
-      tackleBoost15: () => {}, // Handled by modifiers
-      extendedTackle: () => {}, // Handled by modifiers
-      pressTackleRange: (ctx) => {
-        if (!ctx.player?.hasBall) {
-          this.addTempBuff('pressTackleRange', 'tackleRange', 20, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 0.5);
-        }
-      },
-      counterPressTackle: (ctx) => {
-        const lostBallRecently = (ctx.player?.lostBallAt || 0) > this.scene.time.now - 2000;
-        if (lostBallRecently) {
-          this.addTempBuff('counterPressTackle', 'tackle', 40, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      tackleReset: (ctx) => {
-        this.cooldowns.delete('tackle');
-        this.emit('cooldownReset', 'tackle');
-        this.procUpgrade(upgradeId, 1);
-      },
-      persistentTackle: (ctx) => {
-        if (!ctx.target) {
-          // Failed tackle - build stacks
-          const stacks = Math.min((this.stacks.get('persistentTackle') || 0) + 2, 20);
-          this.stacks.set('persistentTackle', stacks);
-          this.addTempBuff('persistentTackle', 'tackle', stacks, 10000, 'upgrade');
-          this.procUpgrade(upgradeId, 0.6);
-        } else {
-          // Successful - reset stacks
-          this.stacks.set('persistentTackle', 0);
-        }
-      },
-      tackleSlow: (ctx) => {
-        ctx.target?.applyDebuff?.('slow', 2000, 0.7);
-        this.procUpgrade(upgradeId, 0.8);
-      },
-      lastManTackleRange: (ctx) => {
-        // Check if furthest back
-        this.addTempBuff('lastManTackleRange', 'tackleRange', 30, 500, 'upgrade');
-        this.procUpgrade(upgradeId, 0.7);
-      },
-      packTackleBoost: (ctx) => {
-        const nearby = this.countNearbyTeammates(ctx.player, ctx.scene);
-        if (nearby > 0) {
-          this.addTempBuff('packTackleBoost', 'tackle', 15 * nearby, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 0.8);
-        }
-      },
-      ownDTackleBoost: (ctx) => {
-        if (ctx.position && ctx.position.x > 950) {
-          this.addTempBuff('ownDTackleBoost', 'tackle', 40, 500, 'upgrade');
-          this.procUpgrade(upgradeId, 0.8);
-        }
-      },
-      
-      // === STEAL EFFECTS ===
-      tackleStaminaRestore: (ctx) => {
-        ctx.player?.restoreStamina?.(20);
-        this.procUpgrade(upgradeId, 1);
-      },
-      stealDodgeReset: (ctx) => {
-        this.cooldowns.delete('dodge');
-        this.emit('cooldownReset', 'dodge');
-        this.procUpgrade(upgradeId, 1);
-      },
-      tackleSpeed: (ctx) => {
-        this.addTempBuff('tackleSpeed', 'speed', 20, 2000, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      stealStamina: (ctx) => {
-        ctx.target?.drainStamina?.(15);
-        ctx.player?.restoreStamina?.(15);
-        this.procUpgrade(upgradeId, 1);
-      },
-      stealStaminaRestore: (ctx) => {
-        ctx.player?.restoreStamina?.(30);
-        this.procUpgrade(upgradeId, 1);
-      },
-      teamCounterPress: (ctx) => {
-        this.emit('teamCounterPress', { duration: 3000 });
-        this.procUpgrade(upgradeId, 1);
-      },
-      stealSpeedBurst: (ctx) => {
-        this.addTempBuff('stealSpeedBurst', 'speed', 50, 3000, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      stealSpeedStacking: (ctx) => {
-        const stacks = Math.min((this.stacks.get('stealSpeed') || 0) + 1, 5);
-        this.stacks.set('stealSpeed', stacks);
-        this.addTempBuff('stealSpeedStacking', 'speed', 10 * stacks, 60000, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      
-      // === DODGE EFFECTS ===
-      dodgeBoost10: () => {}, // Handled by modifiers
-      extendedIframes: () => {}, // Handled elsewhere
-      dodgeDecoy: (ctx) => {
-        this.emit('createDecoy', ctx);
-        this.procUpgrade(upgradeId, 1);
-      },
-      dodgeShield: (ctx) => {
-        ctx.player?.addShield?.(500);
-        this.procUpgrade(upgradeId, 1);
-      },
-      slowMo: (ctx) => {
-        this.scene.time.timeScale = 0.5;
-        this.scene.time.delayedCall(500, () => {
-          this.scene.time.timeScale = 1;
-        });
-        this.procUpgrade(upgradeId, 1);
-      },
-      dodgeFakeShot: (ctx) => {
-        this.emit('fakeShot', ctx);
-        this.procUpgrade(upgradeId, 1);
-      },
-      dodgeConfuse: (ctx) => {
-        this.emit('confuseNearby', { ...ctx, duration: 1000 });
-        this.procUpgrade(upgradeId, 1);
-      },
-      doubleDodge: (ctx) => {
-        // Adds extra dodge charge
-        this.emit('extraDodgeCharge');
-        this.procUpgrade(upgradeId, 1);
-      },
-      
-      // === GOAL EFFECTS ===
-      goalSpeedStack: (ctx) => {
-        const stacks = Math.min((this.stacks.get('goalSpeed') || 0) + 1, 3);
-        this.stacks.set('goalSpeed', stacks);
-        this.addTempBuff('goalSpeedStack', 'speed', 5 * stacks, 60000, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      goalFullRestore: (ctx) => {
-        ctx.player?.restoreStamina?.(100);
-        this.cooldowns.clear();
-        this.emit('allCooldownsReset');
-        this.procUpgrade(upgradeId, 1);
-      },
-      dGoalCooldownReset: (ctx) => {
-        if (ctx.position && (ctx.position.x < 150 || ctx.position.x > 1050)) {
-          this.cooldowns.clear();
-          this.emit('allCooldownsReset');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      goalStaminaHeal: (ctx) => {
-        const missing = (ctx.player?.maxStamina || 100) - (ctx.player?.stamina || 0);
-        ctx.player?.restoreStamina?.(missing * 0.5);
-        this.procUpgrade(upgradeId, 1);
-      },
-      
-      // === RECEIVE EFFECTS ===
-      receiveControl: (ctx) => {
-        this.addTempBuff('receiveControl', 'control', 20, 1000, 'upgrade');
-        this.procUpgrade(upgradeId, 0.8);
-      },
-      receiveAccel: (ctx) => {
-        this.addTempBuff('receiveAccel', 'acceleration', 50, 1000, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      looseBallControl: (ctx) => {
-        this.addTempBuff('looseBallControl', 'control', 40, 1000, 'upgrade');
-        this.procUpgrade(upgradeId, 0.9);
-      },
-      
-      // === TICK EFFECTS (run every frame) ===
-      ballMagnet: (ctx) => {
-        if (ctx.ball && !ctx.player?.hasBall && ctx.ball.isLoose) {
-          const dist = Phaser.Math.Distance.Between(
-            ctx.player.x, ctx.player.y, ctx.ball.x, ctx.ball.y
-          );
-          if (dist < 100 && dist > 20) {
-            ctx.ball.applyMagnet?.(ctx.player.x, ctx.player.y, 0.02);
-            this.procUpgrade(upgradeId, 0.1);
-          }
-        }
-      },
-      strongBallMagnet: (ctx) => {
-        if (ctx.ball && !ctx.player?.hasBall && ctx.ball.isLoose) {
-          const dist = Phaser.Math.Distance.Between(
-            ctx.player.x, ctx.player.y, ctx.ball.x, ctx.ball.y
-          );
-          if (dist < 150 && dist > 20) {
-            ctx.ball.applyMagnet?.(ctx.player.x, ctx.player.y, 0.05);
-            this.procUpgrade(upgradeId, 0.1);
-          }
-        }
-      },
-      iceTurfEffect: (ctx) => {
-        this.emit('iceTurfActive');
-      },
-      speedTrail: (ctx) => {
-        if (ctx.player?.isMoving) {
-          this.emit('createSpeedTrail', ctx.position);
-        }
-      },
-      warmUpBuff: (ctx) => {
-        if (ctx.momentTimeRemaining && ctx.momentTimeRemaining > 50) {
-          this.addTempBuff('warmUpBuff', 'all', 10, 200, 'upgrade');
-        }
-      },
-      coolDownBuff: (ctx) => {
-        if (ctx.momentTimeRemaining && ctx.momentTimeRemaining < 10) {
-          this.addTempBuff('coolDownBuff', 'all', 10, 200, 'upgrade');
-        }
-      },
-      teammateBuff: (ctx) => {
-        const nearby = this.countNearbyTeammates(ctx.player, ctx.scene);
-        if (nearby > 0) {
-          this.addTempBuff('teammateBuff', 'all', 5 * nearby, 200, 'upgrade');
-        }
-      },
-      teamPress: (ctx) => {
-        if (ctx.player?.isPressing) {
-          this.emit('teammatesPress');
-        }
-      },
-      losingBuff: (ctx) => {
-        if (ctx.isLosing) {
-          this.addTempBuff('losingBuff', 'all', 30, 200, 'upgrade');
-        }
-      },
-      avatarMode: (ctx) => {
-        // Check if behind by 2+ goals
-        if (ctx.isLosing) {
-          this.addTempBuff('avatarMode', 'all', 100, 200, 'upgrade');
-        }
-      },
-      lowStaminaSpeed: (ctx) => {
-        if (ctx.player?.stamina < 30) {
-          this.addTempBuff('lowStaminaSpeed', 'attackSpeed', 100, 200, 'upgrade');
-        }
-      },
-      poacherSpeed: (ctx) => {
-        if (ctx.ball && ctx.ball.isLoose && ctx.ball.x > 950) {
-          this.addTempBuff('poacherSpeed', 'speed', 40, 200, 'upgrade');
-        }
-      },
-      dCircleRush: (ctx) => {
-        if (ctx.ball && ctx.ball.x > 950) {
-          this.addTempBuff('dCircleRush', 'speed', 80, 200, 'upgrade');
-        }
-      },
-      possessionStacking: (ctx) => {
-        if (ctx.possessionTime && ctx.possessionTime > 5) {
-          const stacks = Math.floor(ctx.possessionTime / 5);
-          this.addTempBuff('possessionStacking', 'all', 5 * stacks, 200, 'upgrade');
-        }
-      },
-      stationaryControl: (ctx) => {
-        if (ctx.isStationary) {
-          this.addTempBuff('stationaryControl', 'control', 20, 200, 'upgrade');
-        }
-      },
-      finalSecondsBoost: (ctx) => {
-        if (ctx.momentTimeRemaining && ctx.momentTimeRemaining < 15) {
-          this.addTempBuff('finalSecondsBoost', 'all', 30, 200, 'upgrade');
-        }
-      },
-      sprintRampUp: (ctx) => {
-        // Would need sprint tracking
-        this.addTempBuff('sprintRampUp', 'speed', 15, 200, 'upgrade');
-      },
-      openFieldSpeed: (ctx) => {
-        if (this.isInOpenSpace(ctx.player, ctx.scene)) {
-          this.addTempBuff('openFieldSpeed', 'speed', 25, 200, 'upgrade');
-        }
-      },
-      highLineSpeed: (ctx) => {
-        this.addTempBuff('highLineSpeed', 'speed', 10, 200, 'upgrade');
-        this.emit('teamPushHigher');
-      },
-      
-      // === MOMENT EFFECTS ===
-      halfTimeStamina: () => {},
-      carrySpeed: (ctx) => {
-        // 50% of speed bonuses carry over
-        const speedBonus = this.statModifiers.get('speed') || 0;
-        this.addTempBuff('carrySpeed', 'speed', speedBonus * 0.5, 30000, 'upgrade');
-        this.procUpgrade(upgradeId, 1);
-      },
-      guaranteedGoal: (ctx) => {
-        if (!this.oneTimeUsed.has('guaranteedGoal')) {
-          this.emit('guaranteedGoal');
-          this.oneTimeUsed.add('guaranteedGoal');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      stackingSpeed: (ctx) => {
-        const stacks = (this.stacks.get('stackingSpeed') || 0) + 5;
-        this.stacks.set('stackingSpeed', stacks);
-        const current = this.statModifiers.get('speed') || 0;
-        this.statModifiers.set('speed', current + 5);
-        this.procUpgrade(upgradeId, 1);
-      },
-      
-      // === DEFENSIVE EFFECTS ===
-      reducedStun10: () => {}, // Handled by getModifiedStat
-      stunCap: () => {},
-      knockbackImmune: () => {},
-      autoBlock: (ctx) => {
-        if (!this.oneTimeUsed.has('autoBlock')) {
-          this.emit('autoBlockGoal');
-          this.oneTimeUsed.add('autoBlock');
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      reducedKnockback: () => {}, // Handled by modifiers
-      tacklerBounce: (ctx) => {
-        if (ctx.player?.hasBall) {
-          this.emit('tacklerBounce', ctx);
-          this.procUpgrade(upgradeId, 1);
-        }
-      },
-      
-      // === DEFAULT ===
-      default: () => {}
-    };
+    // Update per-second stats
+    const now = context.time || this.scene.time.now;
+    if (now - this.lastEventStatsReset >= 1000) {
+      this.eventStatsPerSecond = { ...this.eventStats };
+      this.eventStats = { tick: 0, shot: 0, pass: 0, tackle: 0, steal: 0, receive: 0, goal: 0, dodge: 0, momentStart: 0, momentEnd: 0 };
+      this.lastEventStatsReset = now;
+    }
     
-    return callbacks[effectId] || callbacks.default;
-  }
-  
-  // ========================================
-  // TRIGGER HOOKS
-  // ========================================
-  
-  trigger(hook: UpgradeHook, context: UpgradeContext): void {
-    const effects = this.effects.get(hook) || [];
-    effects.forEach(effect => {
+    // Get hooks for this event
+    const hookArray = this.hooks.get(eventName);
+    if (!hookArray || hookArray.length === 0) return;
+    
+    // Execute each hook
+    hookArray.forEach(hook => {
       try {
-        effect.callback(context);
+        hook.callback(context);
       } catch (e) {
-        console.warn(`[UPGRADE] Error in ${effect.upgradeId}:`, e);
+        console.error(`[UPGRADE_SYSTEM] Error in ${hook.upgradeId}:`, e);
       }
     });
     
-    // Check for Give-and-Go on pass/receive
-    if (hook === 'onPass') {
+    // Check Give-and-Go on pass/receive
+    if (eventName === 'pass') {
       this.trackPassForGiveAndGo(context);
-    } else if (hook === 'onReceive') {
+    } else if (eventName === 'receive') {
       this.checkGiveAndGo(context);
     }
   }
   
+  // Legacy method name
+  trigger(hook: string, context: UpgradeContext): void {
+    // Map old hook names to event names
+    const hookToEvent: Record<string, string> = {
+      'onShot': 'shot', 'onPass': 'pass', 'onTackle': 'tackle', 'onSteal': 'steal',
+      'onReceive': 'receive', 'onGoal': 'goal', 'onDodge': 'dodge', 'onTick': 'tick',
+      'onMomentStart': 'momentStart', 'onMomentEnd': 'momentEnd'
+    };
+    const eventName = hookToEvent[hook] || hook;
+    this.emitEvent(eventName, context);
+  }
+  
   // ========================================
-  // PROC FEEDBACK SYSTEM
+  // CALLBACK FACTORY - REAL IMPLEMENTATIONS
   // ========================================
   
-  procUpgrade(upgradeId: string, intensity: number = 1): void {
-    const upgrade = this.ownedUpgrades.find(u => u.id === upgradeId);
-    if (!upgrade) return;
+  private createCallback(upgrade: Upgrade): (ctx: UpgradeContext) => void {
+    const effectId = upgrade.effectId;
+    const upgradeId = upgrade.id;
     
+    // Return the appropriate callback based on effectId
+    switch (effectId) {
+      // === STAT BOOSTS (passive - handled by modifiers, but log proc) ===
+      case 'speedBoost10':
+      case 'shotPowerBoost15':
+      case 'controlBoost15':
+      case 'tackleBoost15':
+      case 'passBoost15':
+      case 'staminaBoost20':
+      case 'dodgeBoost10':
+      case 'reducedCooldowns':
+      case 'goldenBoost':
+        return () => {}; // Already applied via modifiers
+      
+      // === AUTO HIT IN D (THE KEY UPGRADE) ===
+      case 'autoHitInD':
+        return (ctx) => {
+          if (!ctx.playerHasBall || !ctx.playerInAttackingD || !ctx.playerCanShoot) return;
+          
+          // Check cooldown
+          const cooldownKey = `autoHitInD_cooldown`;
+          const lastProc = this.upgradeCooldowns.get(cooldownKey) || 0;
+          const now = ctx.time || this.scene.time.now;
+          if (now - lastProc < 700) return; // 700ms cooldown
+          
+          this.upgradeCooldowns.set(cooldownKey, now);
+          
+          // TRIGGER THE SHOT
+          console.log('[AUTO_HIT_IN_D] Triggering auto-shot!');
+          this.emit('autoShot', { source: 'autoHitInD' });
+          this.procUpgrade(upgradeId, 'Auto Hit in D', 1);
+        };
+      
+      // === CIRCLE SPECIALIST (shot power in D) ===
+      case 'circleShotBoost':
+        return (ctx) => {
+          if (ctx.playerInAttackingD) {
+            this.addTempBuff('circleShotBoost', 'shotPower', 30, 500, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 0.8);
+          }
+        };
+      
+      // === SPEED EFFECTS ===
+      case 'homeHalfSpeed':
+        return (ctx) => {
+          if (ctx.player && ctx.player.x < 600) {
+            this.addTempBuff('homeHalfSpeed', 'speed', 8, 200, 'upgrade');
+          }
+        };
+      
+      case 'openSpaceSpeed':
+        return (ctx) => {
+          if (this.isInOpenSpace(ctx)) {
+            this.addTempBuff('openSpaceSpeed', 'speed', 10, 200, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 0.3);
+          }
+        };
+      
+      case 'pressSpeed':
+        return (ctx) => {
+          if (ctx.player && !ctx.playerHasBall) {
+            this.addTempBuff('pressSpeed', 'speed', 5, 200, 'upgrade');
+          }
+        };
+      
+      case 'dodgeSpeedBurst':
+        return (ctx) => {
+          this.addTempBuff('dodgeSpeedBurst', 'speed', 15, 2000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // === BALL MAGNET ===
+      case 'ballMagnet':
+      case 'strongBallMagnet':
+        return (ctx) => {
+          if (!ctx.ball || ctx.playerHasBall) return;
+          const dist = Phaser.Math.Distance.Between(ctx.player.x, ctx.player.y, ctx.ball.x, ctx.ball.y);
+          const range = effectId === 'strongBallMagnet' ? 150 : 100;
+          const strength = effectId === 'strongBallMagnet' ? 0.05 : 0.02;
+          if (dist < range && dist > 20 && ctx.ball.isLoose) {
+            ctx.ball.applyMagnet?.(ctx.player.x, ctx.player.y, strength);
+            this.procUpgrade(upgradeId, upgrade.name, 0.1);
+          }
+        };
+      
+      // === SHOT EFFECTS ===
+      case 'reboundShotPower':
+        return (ctx) => {
+          this.addTempBuff('reboundShotPower', 'shotPower', 20, 500, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 0.8);
+        };
+      
+      case 'stationaryShotBoost':
+        return (ctx) => {
+          if (ctx.playerIsStationary) {
+            this.addTempBuff('stationaryShotBoost', 'shotPower', 50, 500, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 1);
+          }
+        };
+      
+      case 'enemyDShotPower':
+        return (ctx) => {
+          if (ctx.playerInAttackingD) {
+            this.addTempBuff('enemyDShotPower', 'shotPower', 20, 500, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 0.8);
+          }
+        };
+      
+      case 'closeRangeShotBoost':
+        return (ctx) => {
+          // Close range = within 150px of goal
+          const goalX = ctx.player.x > 600 ? 1200 : 0;
+          const distToGoal = Math.abs(ctx.player.x - goalX);
+          if (distToGoal < 200) {
+            this.addTempBuff('closeRangeShotBoost', 'shotSpeed', 30, 500, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 1);
+          }
+        };
+      
+      case 'curvingShot':
+        return (ctx) => {
+          ctx.ball?.addCurve?.(0.3);
+          this.procUpgrade(upgradeId, upgrade.name, 0.8);
+        };
+      
+      // === PASS EFFECTS ===
+      case 'fastPass':
+        return (ctx) => {
+          this.addTempBuff('fastPass', 'passSpeed', 30, 500, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 0.6);
+        };
+      
+      case 'trianglePassBoost':
+        return (ctx) => {
+          this.addTempBuff('trianglePassBoost', 'passPower', 25, 500, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 0.8);
+        };
+      
+      // === TACKLE/STEAL EFFECTS ===
+      case 'tackleStaminaRestore':
+        return (ctx) => {
+          ctx.player?.restoreStamina?.(20);
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      case 'tackleReset':
+        return (ctx) => {
+          this.emit('cooldownReset', 'tackle');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      case 'stealDodgeReset':
+        return (ctx) => {
+          this.emit('cooldownReset', 'dodge');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      case 'tackleSpeed':
+        return (ctx) => {
+          this.addTempBuff('tackleSpeed', 'speed', 20, 2000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // === RECEIVE EFFECTS ===
+      case 'receiveControl':
+        return (ctx) => {
+          this.addTempBuff('receiveControl', 'control', 20, 1000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 0.8);
+        };
+      
+      case 'receiveAccel':
+        return (ctx) => {
+          this.addTempBuff('receiveAccel', 'speed', 50, 1000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // === GOAL EFFECTS ===
+      case 'goalSpeedStack':
+        return (ctx) => {
+          const stacks = Math.min((this.stacks.get('goalSpeed') || 0) + 1, 3);
+          this.stacks.set('goalSpeed', stacks);
+          this.addTempBuff('goalSpeedStack', 'speed', 5 * stacks, 60000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      case 'goalFullRestore':
+        return (ctx) => {
+          ctx.player?.restoreStamina?.(100);
+          this.emit('allCooldownsReset');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // === DODGE EFFECTS ===
+      case 'slowMo':
+        return (ctx) => {
+          this.scene.time.timeScale = 0.5;
+          this.scene.time.delayedCall(500, () => { this.scene.time.timeScale = 1; });
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      case 'dodgeShield':
+        return (ctx) => {
+          ctx.player?.addShield?.(500);
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // === MOMENT EFFECTS ===
+      case 'warmUpBuff':
+        return (ctx) => {
+          if (ctx.momentTimeRemaining && ctx.momentTimeRemaining > 50) {
+            this.addTempBuff('warmUpBuff', 'all', 10, 200, 'upgrade');
+          }
+        };
+      
+      case 'coolDownBuff':
+        return (ctx) => {
+          if (ctx.momentTimeRemaining && ctx.momentTimeRemaining < 10) {
+            this.addTempBuff('coolDownBuff', 'all', 10, 200, 'upgrade');
+          }
+        };
+      
+      case 'finalSecondsBoost':
+        return (ctx) => {
+          if (ctx.momentTimeRemaining && ctx.momentTimeRemaining < 15) {
+            this.addTempBuff('finalSecondsBoost', 'all', 30, 200, 'upgrade');
+          }
+        };
+      
+      case 'losingBuff':
+        return (ctx) => {
+          if (ctx.isLosing) {
+            this.addTempBuff('losingBuff', 'all', 30, 200, 'upgrade');
+          }
+        };
+      
+      case 'avatarMode':
+        return (ctx) => {
+          if (ctx.isLosing) {
+            this.addTempBuff('avatarMode', 'all', 100, 200, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 0.5);
+          }
+        };
+      
+      // === D-CIRCLE EFFECTS ===
+      case 'dCircleRush':
+        return (ctx) => {
+          if (ctx.playerInDefendingD) {
+            this.addTempBuff('dCircleRush', 'speed', 80, 200, 'upgrade');
+          }
+        };
+      
+      case 'poacherSpeed':
+        return (ctx) => {
+          if (ctx.ball && ctx.ball.isLoose && ctx.playerInAttackingD) {
+            this.addTempBuff('poacherSpeed', 'speed', 40, 200, 'upgrade');
+          }
+        };
+      
+      // === AUTO-BLOCK ===
+      case 'autoBlock':
+        return (ctx) => {
+          if (!this.oneTimeUsed.has('autoBlock')) {
+            // Logic would be triggered by goal threat detection
+          }
+        };
+      
+      case 'autoBlockShot':
+        return (ctx) => {
+          // Similar to autoBlock but different trigger
+        };
+      
+      // === TEAMMATE EFFECTS ===
+      case 'teammateBuff':
+        return (ctx) => {
+          const nearby = this.countNearbyTeammates(ctx);
+          if (nearby > 0) {
+            this.addTempBuff('teammateBuff', 'all', 5 * nearby, 200, 'upgrade');
+          }
+        };
+      
+      case 'teamPress':
+        return (ctx) => {
+          if (!ctx.playerHasBall) {
+            this.emit('teammatesPress');
+          }
+        };
+      
+      // === DEFAULT ===
+      default:
+        return () => {};
+    }
+  }
+  
+  // ========================================
+  // PROC FEEDBACK
+  // ========================================
+  
+  procUpgrade(upgradeId: string, upgradeName: string, intensity: number = 1): void {
     // Track count
     const count = (this.procCounts.get(upgradeId) || 0) + 1;
     this.procCounts.set(upgradeId, count);
     
-    // Visual cooldown
-    const lastProc = this.lastProcTime.get(upgradeId) || 0;
-    const now = this.scene.time.now;
-    
-    if (now - lastProc < this.PROC_COOLDOWN) return;
-    this.lastProcTime.set(upgradeId, now);
-    
-    // Track recent procs
-    this.recentProcs.push({ upgradeId, name: upgrade.name, time: now });
+    // Add to recent procs
+    this.recentProcs.push({ upgradeId, upgradeName, time: this.scene.time.now });
     if (this.recentProcs.length > this.MAX_RECENT_PROCS) {
       this.recentProcs.shift();
     }
     
-    // Emit for UI feedback
-    this.emit('upgradeProc', { upgrade, upgradeId, intensity, count });
-  }
-  
-  getTopProcs(limit: number = 5): ProcStats[] {
-    const stats: ProcStats[] = [];
-    this.procCounts.forEach((count, upgradeId) => {
-      const upgrade = this.ownedUpgrades.find(u => u.id === upgradeId);
-      if (upgrade && count > 0) {
-        stats.push({ upgradeId, upgradeName: upgrade.name, upgradeIcon: upgrade.icon, count });
-      }
-    });
-    stats.sort((a, b) => b.count - a.count);
-    return stats.slice(0, limit);
-  }
-  
-  getRecentProcs(): { upgradeId: string; name: string; time: number }[] {
-    return [...this.recentProcs].reverse();
-  }
-  
-  getProcCount(upgradeId: string): number {
-    return this.procCounts.get(upgradeId) || 0;
+    // Emit for UI
+    this.emit('upgradeProc', { upgradeId, upgradeName, intensity, count });
+    
+    console.log(`[PROC] ${upgradeName} (${upgradeId}) x${count}`);
   }
   
   // ========================================
@@ -849,7 +592,6 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
   // ========================================
   
   addTempBuff(id: string, stat: string, value: number, duration: number, source: ActiveBuff['source']): void {
-    // Check if buff already exists
     const existing = this.activeBuffs.find(b => b.id === id);
     if (existing) {
       existing.expiresAt = this.scene.time.now + duration;
@@ -859,7 +601,7 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
     
     this.activeBuffs.push({
       id,
-      name: id.replace(/([A-Z])/g, ' $1').trim(),
+      name: id,
       icon: '⬆️',
       stat,
       value,
@@ -880,8 +622,6 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
   
   getModifiedStat(baseStat: number, statName: string): number {
     let modifier = this.statModifiers.get(statName) || 0;
-    
-    // Add 'all' modifier
     modifier += this.statModifiers.get('all') || 0;
     
     // Add temp buffs
@@ -916,7 +656,74 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
   }
   
   // ========================================
-  // GIVE-AND-GO SYSTEM
+  // SYNERGIES
+  // ========================================
+  
+  private checkSynergyActivation(synergy: SynergySet, count: number): void {
+    const prevTier = this.activeSynergyTiers.get(synergy) || 0;
+    let newTier = 0;
+    
+    if (count >= 5) newTier = 2;
+    else if (count >= 3) newTier = 1;
+    
+    if (newTier > prevTier) {
+      this.activeSynergyTiers.set(synergy, newTier);
+      this.applySynergyBonus(synergy, newTier);
+      this.emit('synergyActivated', { synergy, tier: newTier, name: SYNERGY_NAMES[synergy] });
+      console.log(`[SYNERGY] ${SYNERGY_NAMES[synergy]} Tier ${newTier} activated!`);
+    }
+  }
+  
+  private applySynergyBonus(synergy: SynergySet, tier: number): void {
+    // Apply synergy stat bonuses
+    const bonuses: Record<string, { tier1: Record<string, number>; tier2: Record<string, number> }> = {
+      press: { tier1: { tackle: 20, speed: 10 }, tier2: { tackle: 40, speed: 20 } },
+      trianglePassing: { tier1: { passPower: 25, control: 15 }, tier2: { passPower: 50, control: 30 } },
+      dragFlick: { tier1: { shotPower: 25 }, tier2: { shotPower: 50 } },
+      rebound: { tier1: { speed: 20 }, tier2: { speed: 40, shotPower: 20 } },
+      trickster: { tier1: { dodge: 20, control: 15 }, tier2: { dodge: 40, control: 30 } },
+      sweeper: { tier1: { tackle: 20 }, tier2: { tackle: 40, speed: 20 } },
+      speedster: { tier1: { speed: 15 }, tier2: { speed: 30 } },
+      poacher: { tier1: { shotPower: 15 }, tier2: { shotPower: 30, speed: 15 } }
+    };
+    
+    const synergyBonuses = bonuses[synergy];
+    if (!synergyBonuses) return;
+    
+    const stats = tier === 2 ? synergyBonuses.tier2 : synergyBonuses.tier1;
+    Object.entries(stats).forEach(([stat, value]) => {
+      const current = this.statModifiers.get(stat) || 0;
+      this.statModifiers.set(stat, current + value);
+    });
+  }
+  
+  getSynergyCount(synergy: SynergySet): number {
+    return this.synergyCounts.get(synergy) || 0;
+  }
+  
+  isSynergyActive(synergy: SynergySet): boolean {
+    return (this.activeSynergyTiers.get(synergy) || 0) > 0;
+  }
+  
+  getSynergyStatuses(): SynergyStatus[] {
+    const statuses: SynergyStatus[] = [];
+    this.synergyCounts.forEach((count, synergy) => {
+      if (count > 0) {
+        const tier = this.activeSynergyTiers.get(synergy) || 0;
+        statuses.push({
+          synergy,
+          name: SYNERGY_NAMES[synergy],
+          count,
+          tier,
+          active: tier > 0
+        });
+      }
+    });
+    return statuses.sort((a, b) => b.count - a.count);
+  }
+  
+  // ========================================
+  // GIVE-AND-GO
   // ========================================
   
   private trackPassForGiveAndGo(ctx: UpgradeContext): void {
@@ -928,33 +735,26 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
     const now = this.scene.time.now;
     const timeSincePass = now - this.lastPassTime;
     
-    // Check if received from the player we passed to within 3.5s
     if (timeSincePass < 3500 && this.lastPassTarget) {
-      // Activate Give-and-Go buff
-      let buffMultiplier = 1;
-      const triangleTier = this.activeSynergyTiers.get('trianglePassing') || 0;
-      if (triangleTier >= 2) buffMultiplier = 2;
+      // Give-and-Go activated!
+      let multiplier = 1;
+      if ((this.activeSynergyTiers.get('trianglePassing') || 0) >= 2) {
+        multiplier = 2;
+      }
       
-      this.giveAndGoActive = true;
-      this.giveAndGoExpiresAt = now + 2000;
+      this.addTempBuff('giveAndGo', 'speed', 15 * multiplier, 2000, 'giveAndGo');
+      this.addTempBuff('giveAndGoControl', 'control', 20 * multiplier, 2000, 'giveAndGo');
+      this.addTempBuff('giveAndGoShot', 'shotPower', 15 * multiplier, 2000, 'giveAndGo');
       
-      this.addTempBuff('giveAndGo', 'speed', 15 * buffMultiplier, 2000, 'giveAndGo');
-      this.addTempBuff('giveAndGoControl', 'control', 20 * buffMultiplier, 2000, 'giveAndGo');
-      this.addTempBuff('giveAndGoShot', 'shotPower', 15 * buffMultiplier, 2000, 'giveAndGo');
-      
-      this.emit('giveAndGoActivated', { multiplier: buffMultiplier });
+      this.emit('giveAndGoActivated', { multiplier });
       console.log('[GIVE_AND_GO] Activated!');
     }
     
     this.lastPassTarget = null;
   }
   
-  isGiveAndGoActive(): boolean {
-    return this.giveAndGoActive && this.giveAndGoExpiresAt > this.scene.time.now;
-  }
-  
   // ========================================
-  // PLAY CALLING SYSTEM
+  // PLAY CALLING
   // ========================================
   
   callPlay(play: 'press' | 'hold' | 'counter'): boolean {
@@ -964,19 +764,6 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
     this.activePlay = play;
     this.playExpiresAt = now + 8000;
     this.playCooldownUntil = now + 20000;
-    
-    // Apply play effects
-    switch (play) {
-      case 'press':
-        this.emit('playPress', { duration: 8000 });
-        break;
-      case 'hold':
-        this.emit('playHold', { duration: 8000 });
-        break;
-      case 'counter':
-        this.emit('playCounter', { duration: 8000 });
-        break;
-    }
     
     this.emit('playCalled', { play, duration: 8000 });
     console.log(`[PLAY] Called: ${play.toUpperCase()}`);
@@ -993,95 +780,94 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
   }
   
   // ========================================
-  // SYNERGY STATUS
-  // ========================================
-  
-  getSynergyStatuses(): SynergyStatus[] {
-    const statuses: SynergyStatus[] = [];
-    
-    for (const synergy of Object.keys(SYNERGY_NAMES) as SynergySet[]) {
-      const count = this.synergyCounts.get(synergy) || 0;
-      const tier = this.activeSynergyTiers.get(synergy) || 0;
-      
-      if (count > 0) {
-        statuses.push({
-          synergy,
-          name: SYNERGY_NAMES[synergy],
-          count,
-          tier: tier as 0 | 1 | 2,
-          active: tier > 0
-        });
-      }
-    }
-    
-    return statuses.sort((a, b) => b.count - a.count);
-  }
-  
-  getSynergyCount(synergy: SynergySet): number {
-    return this.synergyCounts.get(synergy) || 0;
-  }
-  
-  isSynergyActive(synergy: SynergySet): boolean {
-    return (this.activeSynergyTiers.get(synergy) || 0) > 0;
-  }
-  
-  getActiveSynergies(): SynergySet[] {
-    const active: SynergySet[] = [];
-    this.activeSynergyTiers.forEach((tier, synergy) => {
-      if (tier > 0) active.push(synergy);
-    });
-    return active;
-  }
-  
-  // ========================================
   // HELPERS
   // ========================================
   
-  private isInOpenSpace(player: any, scene: Phaser.Scene): boolean {
-    const enemies = scene.registry.get('enemies') || [];
+  private isInOpenSpace(ctx: UpgradeContext): boolean {
+    const enemies = ctx.scene.registry.get('enemies') || [];
     for (const enemy of enemies) {
-      const dist = Phaser.Math.Distance.Between(player.x, player.y, enemy.x, enemy.y);
+      const dist = Phaser.Math.Distance.Between(ctx.player.x, ctx.player.y, enemy.x, enemy.y);
       if (dist < 150) return false;
     }
     return true;
   }
   
-  private checkTriangleFormation(ctx: UpgradeContext): boolean {
+  private countNearbyTeammates(ctx: UpgradeContext): number {
     const teammates = ctx.scene.registry.get('teammates') || [];
-    const player = ctx.player;
-    if (teammates.length < 1) return false;
-    
-    // Simple check: at least one teammate within range and good angle
-    for (const tm of teammates) {
-      const dist = Phaser.Math.Distance.Between(player.x, player.y, tm.x, tm.y);
-      if (dist < 250 && dist > 50) return true;
-    }
-    return false;
-  }
-  
-  private countNearbyTeammates(player: any, scene: Phaser.Scene): number {
-    const teammates = scene.registry.get('teammates') || [];
     let count = 0;
     for (const tm of teammates) {
-      const dist = Phaser.Math.Distance.Between(player.x, player.y, tm.x, tm.y);
+      const dist = Phaser.Math.Distance.Between(ctx.player.x, ctx.player.y, tm.x, tm.y);
       if (dist < 150) count++;
     }
     return count;
   }
   
   // ========================================
-  // COOLDOWNS
+  // EXTERNAL MODIFIERS (for curses)
   // ========================================
   
-  isOnCooldown(action: string): boolean {
-    const cd = this.cooldowns.get(action);
-    return cd !== undefined && cd > this.scene.time.now;
+  addModifier(mod: { stat: string; value: number }): void {
+    const current = this.statModifiers.get(mod.stat) || 0;
+    this.statModifiers.set(mod.stat, current + mod.value);
+    console.log(`[UPGRADE] Added modifier: ${mod.stat} += ${mod.value}`);
   }
   
-  setCooldown(action: string, duration: number): void {
-    const reduction = this.statModifiers.get('cooldowns') || 0;
-    const actualDuration = duration * (1 + reduction / 100);
-    this.cooldowns.set(action, this.scene.time.now + actualDuration);
+  addHook(hookDef: { event: string; effect: (ctx: any) => void }): void {
+    const hookArray = this.hooks.get(hookDef.event);
+    if (hookArray) {
+      hookArray.push({
+        upgradeId: 'external',
+        upgradeName: 'External Effect',
+        callback: hookDef.effect
+      });
+    }
+  }
+  
+  // ========================================
+  // DEBUG INFO
+  // ========================================
+  
+  getDebugInfo(): {
+    upgradeCount: number;
+    upgrades: Array<{ id: string; name: string }>;
+    recentProcs: ProcRecord[];
+    eventStats: EventStats;
+    modifiers: Record<string, number>;
+    hookCounts: Record<string, number>;
+  } {
+    const hookCounts: Record<string, number> = {};
+    this.hooks.forEach((arr, key) => {
+      hookCounts[key] = arr.length;
+    });
+    
+    return {
+      upgradeCount: this.ownedUpgrades.length,
+      upgrades: this.ownedUpgrades.map(u => ({ id: u.id, name: u.name })),
+      recentProcs: [...this.recentProcs].reverse(),
+      eventStats: { ...this.eventStatsPerSecond },
+      modifiers: this.getAllModifiers(),
+      hookCounts
+    };
+  }
+  
+  getTopProcs(limit: number = 5): ProcStats[] {
+    const procs: ProcStats[] = [];
+    this.procCounts.forEach((count, upgradeId) => {
+      const upgrade = this.ownedUpgrades.find(u => u.id === upgradeId);
+      if (upgrade && count > 0) {
+        procs.push({ 
+          upgradeId, 
+          upgradeName: upgrade.name, 
+          upgradeIcon: upgrade.icon || '⚡',
+          count 
+        });
+      }
+    });
+    return procs.sort((a, b) => b.count - a.count).slice(0, limit);
+  }
+  
+  getProcCount(upgradeId: string): number {
+    return this.procCounts.get(upgradeId) || 0;
   }
   
   // ========================================
@@ -1106,30 +892,28 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
   
   reset(): void {
     this.ownedUpgrades = [];
-    this.effects.forEach(effects => effects.length = 0);
+    this.hooks.forEach(arr => arr.length = 0);
     this.statModifiers.clear();
     this.activeBuffs = [];
     this.synergyCounts.clear();
     this.activeSynergyTiers.clear();
-    this.stacks.clear();
-    this.cooldowns.clear();
-    this.oneTimeUsed.clear();
     this.procCounts.clear();
-    this.lastProcTime.clear();
     this.recentProcs = [];
+    this.upgradeCooldowns.clear();
+    this.stacks.clear();
+    this.oneTimeUsed.clear();
     this.lastPassTime = 0;
     this.lastPassTarget = null;
-    this.giveAndGoActive = false;
     this.activePlay = null;
     this.playExpiresAt = 0;
     this.playCooldownUntil = 0;
+    this.initializeHooks();
   }
   
   resetMoment(): void {
     this.oneTimeUsed.delete('autoBlock');
     this.oneTimeUsed.delete('guaranteedGoal');
     this.procCounts.clear();
-    this.lastProcTime.clear();
     this.recentProcs = [];
   }
 }

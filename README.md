@@ -70,9 +70,13 @@ The production build will be in the `dist/` folder.
 | **Call Play: COUNTER** | **3** (sit deep, burst on turnover) |
 | Pause | Escape or P |
 | Toggle Controls | H (in-game) |
+| **Debug Keys** | |
 | Goal Debug | G (shows goal sensor outlines) |
 | Debug Display | F1 (shows possession, objective, AI state, passes) |
-| Upgrade Debug | F8 (shows active upgrades, stats, procs) |
+| Steal Debug | F3 (logs steal events and moment state) |
+| **Sandbox Test** | **F7** (places player in D with ball - test Auto Hit) |
+| **Upgrade Debug** | **F8** (event stats, procs, modifiers, player state) |
+| **AI Debug** | **F9** (shows AI state labels above each entity) |
 
 > **Tip**: Press R to call for pass! Teammates will prioritize passing to you when the lane is clear.
 
@@ -388,26 +392,35 @@ MIT License - feel free to use this project as a base for your own games!
   description: 'Does something cool',
   rarity: 'rare',
   synergies: ['speedster'],
-  hooks: ['onShot'],  // When this triggers
+  hooks: ['onShot'],  // When this triggers: onTick, onShot, onPass, onTackle, onSteal, etc.
   modifiers: [{ stat: 'shotPower', value: 25, isPercent: true }],  // +25% shot power
-  effectId: 'myEffect',  // Must match callback in UpgradeSystem
+  effectId: 'myEffect',  // Must match callback in UpgradeSystem.createCallback()
   icon: '⚡'
 }
 ```
 
-2. If using hooks (not just modifiers), add callback in `UpgradeSystem.getEffectCallback()`:
+2. If using hooks (not just modifiers), add callback in `UpgradeSystem.createCallback()`:
 ```typescript
-myEffect: (ctx) => {
-  this.addTempBuff('myEffect', 'speed', 20, 2000, 'upgrade');
-  this.procUpgrade(upgradeId, 1);  // Show proc feedback
-}
+case 'myEffect':
+  return (ctx) => {
+    // Add temporary buff
+    this.addTempBuff('myEffect', 'speed', 20, 2000, 'upgrade');
+    // Show proc feedback (name, intensity)
+    this.procUpgrade(upgradeId, upgrade.name, 1);
+  };
 ```
 
-3. **Validation**: On boot, audit will verify your upgrade has either:
-   - At least one modifier, OR
-   - A hook with a real callback
+3. **Testing with Debug Overlays**:
+   - **F8**: Shows active upgrades, event stats/sec, registered hooks, recent procs, stat modifiers
+   - **F7**: Sandbox test - places player in D with ball to test Auto Hit upgrades
+   - Console logs: `[UPGRADE_PICK]`, `[PROC]`, `[AUTO_SHOT]` events are logged
 
-4. **Testing**: Pick your upgrade in-game, press F8 to see it in debug overlay
+4. **Context Available in Callbacks** (`ctx`):
+   - `ctx.player` - the player entity
+   - `ctx.playerHasBall` - boolean
+   - `ctx.playerInAttackingD` - boolean (in shooting circle)
+   - `ctx.playerCanShoot` - boolean (cooldown ready)
+   - `ctx.time`, `ctx.delta` - timing info
 
 ---
 

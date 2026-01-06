@@ -329,10 +329,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.hasBall = false;
     this.shootCooldown = TUNING.COOLDOWN_SHOOT;
     
-    this.upgradeSystem?.trigger('onShot', {
+    this.upgradeSystem?.emitEvent('shot', {
       player: this,
       position: { x: this.x, y: this.y },
-      scene: this.scene
+      scene: this.scene,
+      time: this.scene.time.now
     });
     
     this.onShoot?.(power, angle);
@@ -384,10 +385,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       TUNING.PASS_SPEED_MAX
     );
     
-    this.upgradeSystem?.trigger('onPass', {
+    this.upgradeSystem?.emitEvent('pass', {
       player: this,
       position: { x: this.x, y: this.y },
-      scene: this.scene
+      scene: this.scene,
+      time: this.scene.time.now
     });
     
     this.onPass?.(angle, speed);
@@ -413,10 +415,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.tackleCooldown = TUNING.COOLDOWN_TACKLE;
     this.stamina -= 15;
     
-    this.upgradeSystem?.trigger('onTackle', {
+    this.upgradeSystem?.emitEvent('tackle', {
       player: this,
       position: { x: this.x, y: this.y },
-      scene: this.scene
+      scene: this.scene,
+      time: this.scene.time.now
     });
     
     this.onTackle?.();
@@ -448,10 +451,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     
     const dodgeDistance = TUNING.DODGE_DISTANCE_BASE + this.getModifiedStat('dodge') * TUNING.DODGE_DISTANCE_SCALE;
     
-    this.upgradeSystem?.trigger('onDodge', {
+    this.upgradeSystem?.emitEvent('dodge', {
       player: this,
       position: { x: this.x, y: this.y },
-      scene: this.scene
+      scene: this.scene,
+      time: this.scene.time.now
     });
     
     this.onDodge?.();
@@ -643,10 +647,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.isCallingForPass = false;
     this.callingForPassUntil = 0;
     
-    this.upgradeSystem?.trigger('onReceive', {
+    this.upgradeSystem?.emitEvent('receive', {
       player: this,
       position: { x: this.x, y: this.y },
-      scene: this.scene
+      scene: this.scene,
+      time: this.scene.time.now
     });
     
     this.scene.time.delayedCall(1000, () => {
