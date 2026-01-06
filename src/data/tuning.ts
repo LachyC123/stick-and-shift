@@ -112,7 +112,7 @@ export const COOLDOWN_TACKLE = 600;
 export const COOLDOWN_DODGE = 850;
 
 // ============================================================
-// AI TUNING
+// AI TUNING (AGGRESSIVE SETTINGS FOR CHALLENGING GAMEPLAY)
 // ============================================================
 
 /** Separation radius - AI repels within this distance */
@@ -121,44 +121,68 @@ export const AI_SEPARATION_RADIUS = 90;
 export const AI_SEPARATION_STRENGTH = 35;
 /** Maximum ball chasers per team (1 = only nearest, 2 = nearest + support) */
 export const AI_MAX_CHASERS = 2;
+/** Maximum pressers that can actively close down carrier */
+export const AI_MAX_PRESSERS = 2;
 
+/** AI reaction time in ms (lower = faster reactions) */
+export const AI_REACTION_MS = 140;
 /** Distance at which AI starts pressing the ball carrier */
-export const AI_PRESS_DISTANCE = 260;
+export const AI_PRESS_DISTANCE = 340;
+/** Secondary presser radius */
+export const AI_SECOND_PRESSER_RADIUS = 260;
 /** Distance at which AI attempts tackle */
-export const AI_TACKLE_DISTANCE = 52;
+export const AI_TACKLE_DISTANCE = 58;
+/** Tackle range for AI */
+export const AI_TACKLE_RANGE = 58;
 /** Minimum angle alignment for tackle (cos value, 0.2 = ~78 degrees) */
-export const AI_TACKLE_ANGLE_COS = 0.2;
+export const AI_TACKLE_ANGLE_COS = 0.15;
 /** AI tackle cooldown */
 export const AI_TACKLE_COOLDOWN_MS = 650;
-/** AI decision/reaction interval */
-export const AI_REACTION_MS = 160;
+/** Tackle willingness (0-1) - chance to attempt when conditions are good */
+export const AI_TACKLE_WILLINGNESS = 0.85;
+/** Back-off time after failed tackle (ms) */
+export const AI_TACKLE_BACKOFF_MS = 250;
+
 /** Base AI aggression (0-1) */
-export const AI_AGGRESSION = 0.75;
+export const AI_AGGRESSION = 0.80;
+/** Boss AI aggression */
+export const AI_AGGRESSION_BOSS = 0.95;
 /** How much AI weights the objective (0-1) */
 export const AI_OBJECTIVE_WEIGHT = 0.85;
 
 /** Distance to consider "pressured" */
-export const AI_PRESSURE_RADIUS = 85;
-/** Shooting range from goal */
-export const AI_SHOOT_RANGE = 220;
+export const AI_PRESSURE_RADIUS = 95;
+/** Shooting range from goal - INCREASED for more shots */
+export const AI_SHOOT_RANGE = 420;
+/** Good shooting angle threshold (cos value - higher = stricter) */
+export const AI_SHOOT_ANGLE_COS = 0.55;
 /** Good shooting angle threshold (radians from center) */
-export const AI_SHOOT_ANGLE_THRESHOLD = Math.PI / 4;
+export const AI_SHOOT_ANGLE_THRESHOLD = Math.PI / 3.5;
+/** AI shoot cooldown */
+export const AI_SHOOT_COOLDOWN_MS = 700;
 /** Minimum pass distance */
 export const AI_PASS_MIN_DIST = 70;
 /** Maximum pass distance */
 export const AI_PASS_MAX_DIST = 400;
 /** Lane width for pass blocking check */
 export const AI_LANE_WIDTH = 28;
+/** Pass cooldown for AI */
+export const AI_PASS_COOLDOWN = 520;
 
 /** AI decision interval (ms) - how often AI reconsiders actions */
-export const AI_DECISION_INTERVAL = 180;
-/** Pass cooldown for AI */
-export const AI_PASS_COOLDOWN = 600;
-/** Tackle range for AI */
-export const AI_TACKLE_RANGE = 50;
+export const AI_DECISION_INTERVAL = 140;
 
 /** Chaser hysteresis - how much closer another must be to take over as chaser */
 export const AI_CHASER_HYSTERESIS = 30;
+
+// ============================================================
+// MOMENT SETUP
+// ============================================================
+
+/** Time in ms to lock ball possession at moment start (prevents instant recapture) */
+export const MOMENT_SETUP_LOCK_MS = 300;
+/** Time in ms to prevent crossing center at moment start */
+export const MOMENT_POSITION_LOCK_MS = 400;
 
 // ============================================================
 // GOAL DETECTION

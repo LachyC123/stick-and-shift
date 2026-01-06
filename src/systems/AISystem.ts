@@ -718,27 +718,42 @@ export class AISystem {
     const canPass = !this.isOnPassCooldown(entity);
     const otherEnemies = enemies.filter(e => e !== entity);
     
-    // === PASS WHEN PRESSURED (first priority after immediate danger) ===
+    // Get adjusted aggression for shooting
+    const aggression = this.getAdjustedAggression(config.aggressiveness);
+    
+    // === CHECK SHOOTING OPPORTUNITY FIRST (more aggressive shooting) ===
+    // INCREASED: Shoot from longer range and wider angles
+    const shootRange = TUNING.AI_SHOOT_RANGE + aggression * 80;
+    
+    if (distToGoal < shootRange) {
+      const blockers = defenders.filter(t => {
+        const distToDefender = Phaser.Math.Distance.Between(entity.x, entity.y, t.x, t.y);
+        return distToDefender < 60 && t.x < entity.x;
+      });
+      
+      const angleToGoal = Math.atan2(goalY - entity.y, goalX - entity.x);
+      // More lenient angle check based on aggression
+      const angleThreshold = TUNING.AI_SHOOT_ANGLE_THRESHOLD * (1 + aggression * 0.5);
+      const hasGoodAngle = Math.abs(Math.abs(angleToGoal) - Math.PI) < angleThreshold;
+      
+      // Shoot more willingly: fewer blockers needed, or just aggressive
+      const shouldShoot = (blockers.length <= 1 && hasGoodAngle) || 
+                          (aggression > 0.8 && distToGoal < 300) ||
+                          (config.skill > 0.65 && blockers.length === 0);
+      
+      if (shouldShoot) {
+        // Aim slightly randomized within goal area
+        const targetY = goalY + (Math.random() - 0.5) * 80;
+        return { action: 'shoot', targetX: goalX, targetY, priority: 10 };
+      }
+    }
+    
+    // === PASS WHEN PRESSURED ===
     if (isPressured && canPass && otherEnemies.length > 0) {
       const passTarget = this.findBestPassTarget(entity, null, otherEnemies, defenders, false);
       if (passTarget) {
         this.setPassCooldown(entity);
         return { action: 'pass', targetEntity: passTarget, priority: 9 };
-      }
-    }
-    
-    // === CHECK SHOOTING OPPORTUNITY ===
-    if (distToGoal < TUNING.AI_SHOOT_RANGE + config.skill * 40) {
-      const blockers = defenders.filter(t => {
-        const distToDefender = Phaser.Math.Distance.Between(entity.x, entity.y, t.x, t.y);
-        return distToDefender < 70 && t.x < entity.x;
-      });
-      
-      const angleToGoal = Math.atan2(goalY - entity.y, goalX - entity.x);
-      const hasGoodAngle = Math.abs(Math.abs(angleToGoal) - Math.PI) < TUNING.AI_SHOOT_ANGLE_THRESHOLD;
-      
-      if ((blockers.length === 0 && hasGoodAngle) || config.skill > 0.7) {
-        return { action: 'shoot', targetX: goalX, targetY: goalY, priority: 10 };
       }
     }
     
@@ -858,15 +873,15 @@ export class AISystem {
     const distToCarrier = Phaser.Math.Distance.Between(entity.x, entity.y, ballCarrier.x, ballCarrier.y);
     const allEnemies = this.scene.registry.get('enemies') || [];
     
-    // Get adjusted aggression based on objective
+    // Get adjusted aggression based on objective - MUCH MORE AGGRESSIVE
     const aggression = this.getAdjustedAggression(config.aggressiveness);
     
-    // Calculate press range based on aggression and objective
-    let pressRange = TUNING.AI_PRESS_DISTANCE * (0.6 + aggression * 0.5);
+    // Calculate press range based on aggression and objective - INCREASED
+    let pressRange = TUNING.AI_PRESS_DISTANCE * (0.8 + aggression * 0.4);
     
-    // Force turnovers = higher press
+    // Force turnovers = even higher press
     if (this.currentObjective.type === 'force_turnovers') {
-      pressRange *= 1.25;
+      pressRange *= 1.35;
     }
     
     // Find who is closest to carrier (assign pressing duty)
@@ -880,42 +895,70 @@ export class AISystem {
     const isPrimaryPresser = distancesToCarrier[0]?.entity === entity;
     const isSecondaryPresser = distancesToCarrier[1]?.entity === entity;
     
+    // Check for tackle backoff (prevents spam after failed tackle)
+    const backoffUntil = this.tackleBackoffUntil.get(entity) || 0;
+    const isBackingOff = this.scene.time.now < backoffUntil;
+    
     if (isPrimaryPresser && distToCarrier < pressRange) {
-      // Primary presser: close down and attempt tackle
+      // Primary presser: close down HARD and attempt tackle
       
       // Check angle for tackle (must be approaching from good angle)
       const dx = ballCarrier.x - entity.x;
       const dy = ballCarrier.y - entity.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const facingCarrier = dx / dist;  // How much we're facing carrier
+      const facingCarrier = Math.abs(dx / dist);  // How much we're facing carrier
       
+      // MORE AGGRESSIVE TACKLING - lower thresholds
+      const tackleRange = TUNING.AI_TACKLE_RANGE;
       const canTackle = !this.isTackleOnCooldown(entity) && 
-                        distToCarrier < TUNING.AI_TACKLE_DISTANCE &&
+                        !isBackingOff &&
+                        distToCarrier < tackleRange &&
                         facingCarrier > TUNING.AI_TACKLE_ANGLE_COS;
       
-      if (canTackle && aggression > 0.35) {
+      // MUCH MORE WILLING TO TACKLE
+      const willTackle = Math.random() < TUNING.AI_TACKLE_WILLINGNESS * aggression;
+      
+      if (canTackle && willTackle) {
         return { action: 'tackle', targetEntity: ballCarrier, priority: 10 };
       }
       
-      // Contain behavior: approach from goal-side to force wide
+      // Contain behavior: approach DIRECTLY to ball carrier (more aggressive)
       const goalX = 0;  // Enemy goal is left
-      const containX = ballCarrier.x + (entity.x < ballCarrier.x ? -30 : 30);
-      const containY = ballCarrier.y + (entity.y > ballCarrier.y ? -20 : 20);
       
-      // Move to cut off goal angle
-      const targetX = Phaser.Math.Linear(ballCarrier.x, containX, 0.7);
-      const targetY = Phaser.Math.Linear(ballCarrier.y, containY, 0.3);
+      // Close down directly - less contain, more pressure
+      const targetX = Phaser.Math.Linear(entity.x, ballCarrier.x, 0.85);
+      const targetY = Phaser.Math.Linear(entity.y, ballCarrier.y, 0.85);
       
       return { action: 'move', targetX, targetY, priority: 9 };
     }
     
-    if (isSecondaryPresser && distToCarrier < pressRange * 1.2) {
-      // Secondary: cover the best passing lane
-      const coverPos = this.getCoverPassingLane(entity, ballCarrier, [player, ...teammates]);
-      return { action: 'move', targetX: coverPos.x, targetY: coverPos.y, priority: 8 };
+    if (isSecondaryPresser && distToCarrier < TUNING.AI_SECOND_PRESSER_RADIUS) {
+      // Secondary: ALSO close down from a different angle (trap play)
+      const dx = ballCarrier.x - entity.x;
+      const dy = ballCarrier.y - entity.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const facingCarrier = Math.abs(dx / dist);
+      
+      // Secondary presser can also tackle if close enough
+      const canTackle = !this.isTackleOnCooldown(entity) && 
+                        !isBackingOff &&
+                        distToCarrier < TUNING.AI_TACKLE_RANGE * 1.1 &&
+                        facingCarrier > TUNING.AI_TACKLE_ANGLE_COS;
+      
+      if (canTackle && Math.random() < TUNING.AI_TACKLE_WILLINGNESS * aggression * 0.7) {
+        return { action: 'tackle', targetEntity: ballCarrier, priority: 9 };
+      }
+      
+      // Approach from goal-side (trap angle)
+      const trapAngle = Math.atan2(ballCarrier.y - entity.y, ballCarrier.x - entity.x);
+      const offset = entity.y > ballCarrier.y ? -40 : 40;
+      const targetX = ballCarrier.x - 30;  // Goal-side
+      const targetY = ballCarrier.y + offset;
+      
+      return { action: 'move', targetX, targetY, priority: 8 };
     }
     
-    // Others: hold shape or mark
+    // Others: hold shape or mark - but still be ready to press
     if (config.role === 'defender') {
       // Block shot line
       const shotLinePos = this.getBlockShotLine(entity, ballCarrier);

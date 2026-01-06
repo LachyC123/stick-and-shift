@@ -24,6 +24,19 @@ export interface ObjectiveDescriptor {
   urgency: number;  // 0-1, higher = more urgent (close to objective or low time)
 }
 
+// Cup Run constants
+const CUP_POINTS_TO_WIN = 5;
+
+export interface CupRunState {
+  playerPoints: number;
+  enemyPoints: number;
+  pointsToWin: number;
+  isEnded: boolean;
+  winner: 'player' | 'enemy' | null;
+  comebackCursesTriggered: boolean;
+  activeCurseId: string | null;
+}
+
 export class MomentSystem extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene;
   private moments: MomentDefinition[] = [];
@@ -31,6 +44,17 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
   private currentState?: MomentState;
   private timer?: Phaser.Time.TimerEvent;
   private tickTimer?: Phaser.Time.TimerEvent;
+  
+  // Cup Run state
+  private cupState: CupRunState = {
+    playerPoints: 0,
+    enemyPoints: 0,
+    pointsToWin: CUP_POINTS_TO_WIN,
+    isEnded: false,
+    winner: null,
+    comebackCursesTriggered: false,
+    activeCurseId: null
+  };
   
   // Run stats
   private runStats = {
@@ -48,10 +72,33 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
     this.scene = scene;
   }
   
+  // Get Cup Run state
+  getCupState(): CupRunState {
+    return { ...this.cupState };
+  }
+  
+  // Set active curse
+  setActiveCurse(curseId: string): void {
+    this.cupState.activeCurseId = curseId;
+    this.cupState.comebackCursesTriggered = true;
+  }
+  
   // Start a new run with generated moments
   startRun(momentCount: number = 10): void {
     this.moments = generateRunMoments(momentCount);
     this.currentMomentIndex = 0;
+    
+    // Reset Cup Run state
+    this.cupState = {
+      playerPoints: 0,
+      enemyPoints: 0,
+      pointsToWin: CUP_POINTS_TO_WIN,
+      isEnded: false,
+      winner: null,
+      comebackCursesTriggered: false,
+      activeCurseId: null
+    };
+    
     this.runStats = {
       momentsWon: 0,
       momentsLost: 0,
@@ -62,7 +109,7 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
       bossesBeaten: 0
     };
     
-    this.emit('runStarted', { totalMoments: this.moments.length });
+    this.emit('runStarted', { totalMoments: this.moments.length, cupState: this.cupState });
   }
   
   // Get current moment definition
@@ -454,12 +501,45 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
       this.runStats.momentsLost++;
     }
     
+    // === UPDATE CUP RUN SCORE ===
+    if (isWon) {
+      this.cupState.playerPoints++;
+    } else {
+      this.cupState.enemyPoints++;
+    }
+    
+    console.log(`[CUP RUN] Score: Player ${this.cupState.playerPoints} - ${this.cupState.enemyPoints} Enemy`);
+    
+    // Check if Cup Run is decided
+    if (this.cupState.playerPoints >= this.cupState.pointsToWin) {
+      this.cupState.isEnded = true;
+      this.cupState.winner = 'player';
+      console.log('[CUP RUN] Player wins the Cup!');
+    } else if (this.cupState.enemyPoints >= this.cupState.pointsToWin) {
+      this.cupState.isEnded = true;
+      this.cupState.winner = 'enemy';
+      console.log('[CUP RUN] Enemy wins the Cup!');
+    }
+    
+    // Check for Comeback Curses trigger
+    const deficit = this.cupState.enemyPoints - this.cupState.playerPoints;
+    const shouldTriggerCurses = deficit >= 2 && 
+                                 !this.cupState.comebackCursesTriggered && 
+                                 !this.cupState.isEnded;
+    
     this.emit('momentComplete', {
       isWon,
       state: this.currentState,
       momentNumber: this.currentMomentIndex + 1,
-      isBoss: this.currentState.definition.isBoss
+      isBoss: this.currentState.definition.isBoss,
+      cupState: this.cupState,
+      shouldTriggerComebackCurses: shouldTriggerCurses
     });
+    
+    // If Cup Run ended, trigger run complete
+    if (this.cupState.isEnded) {
+      this.endRun();
+    }
   }
   
   // Advance to next moment

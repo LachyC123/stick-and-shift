@@ -310,6 +310,73 @@ export class RunScene extends Phaser.Scene {
     });
   }
   
+  /**
+   * Show big "TURNOVER WON!" banner when steal objective is completed
+   */
+  private showTurnoverWonBanner(): void {
+    const text = this.add.text(
+      this.cameras.main.centerX,
+      this.cameras.main.centerY,
+      '🏆 TURNOVER WON! 🏆',
+      {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '52px',
+        color: '#00ff00',
+        fontStyle: 'bold',
+        stroke: '#003300',
+        strokeThickness: 8,
+        shadow: {
+          offsetX: 3,
+          offsetY: 3,
+          color: '#000000',
+          blur: 8,
+          fill: true
+        }
+      }
+    );
+    text.setOrigin(0.5);
+    text.setScrollFactor(0);
+    text.setDepth(500);
+    text.setAlpha(0);
+    text.setScale(0.5);
+    
+    // Animate in with punch
+    this.tweens.add({
+      targets: text,
+      alpha: 1,
+      scaleX: 1.1,
+      scaleY: 1.1,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: text,
+          scaleX: 1,
+          scaleY: 1,
+          duration: 100,
+          onComplete: () => {
+            // Hold then fade
+            this.time.delayedCall(800, () => {
+              this.tweens.add({
+                targets: text,
+                alpha: 0,
+                y: text.y - 50,
+                duration: 400,
+                onComplete: () => text.destroy()
+              });
+            });
+          }
+        });
+      }
+    });
+    
+    // Add confetti celebration
+    this.particleManager.goalCelebration(
+      this.cameras.main.centerX,
+      this.cameras.main.centerY
+    );
+  }
+  
   // Debug display state
   private debugDisplayEnabled: boolean = false;
   private debugGraphics?: Phaser.GameObjects.Graphics;
@@ -335,7 +402,31 @@ export class RunScene extends Phaser.Scene {
         'Debug'
       );
     });
+    
+    // F3 toggles steal moment debug (logs steal events)
+    this.input.keyboard?.on('keydown-F3', () => {
+      this.debugStealMoment = !this.debugStealMoment;
+      this.toastManager.info(
+        this.debugStealMoment ? 'Steal debug: ON' : 'Steal debug: OFF',
+        'Debug'
+      );
+      if (this.debugStealMoment) {
+        const cupState = this.momentSystem.getCupState();
+        const moment = this.momentSystem.getCurrentMoment();
+        const state = this.momentSystem.getCurrentState();
+        console.log('=== STEAL MOMENT DEBUG ===');
+        console.log(`Moment: ${moment?.name || 'none'} (${moment?.objective || 'none'})`);
+        console.log(`Ball owner: ${this.ball.owner?.constructor?.name || 'LOOSE'}`);
+        console.log(`Ball lastPossessingTeam: ${this.ball.lastPossessingTeam}`);
+        console.log(`Objective progress: ${state?.objectiveProgress || 0}/${state?.objectiveTarget || 1}`);
+        console.log(`Cup: ${cupState.playerPoints} - ${cupState.enemyPoints}`);
+        console.log(`Init moment lock: ${this.isInitializingMoment}`);
+        console.log('========================');
+      }
+    });
   }
+  
+  private debugStealMoment: boolean = false;
   
   private updateDebugDisplay(): void {
     if (!this.debugDisplayEnabled) {
@@ -893,11 +984,19 @@ export class RunScene extends Phaser.Scene {
     this.momentSystem.on('objectiveProgress', (data: any) => {
       if (data.objective === 'turnover' || data.objective === 'pressWin') {
         if (data.progress >= data.target) {
-          this.toastManager.success('OBJECTIVE COMPLETE!');
-          this.audioSystem.playGoal();  // Use goal sound for celebration
-          this.cameras.main.shake(200, 0.01);
+          // BIG celebration for completing steal objective
+          this.showTurnoverWonBanner();
+          this.audioSystem.playGoal();
+          this.cameras.main.shake(250, 0.015);
+          
+          // Brief hitstop/freeze for impact
+          this.time.timeScale = 0.2;
+          this.time.delayedCall(150, () => {
+            this.time.timeScale = 1.0;
+          });
         } else {
           this.toastManager.success(`Steal! ${data.progress}/${data.target}`);
+          this.audioSystem.playSteal();
         }
       }
     });
@@ -907,6 +1006,10 @@ export class RunScene extends Phaser.Scene {
       if (state) {
         const progress = this.momentSystem.getProgress();
         this.uiSystem.updateFromMomentState(state, progress.current, progress.total);
+        
+        // Also update Cup Run display
+        const cupState = this.momentSystem.getCupState();
+        this.uiSystem.updateCupRun(cupState.playerPoints, cupState.enemyPoints, cupState.pointsToWin);
       }
     });
     
@@ -1007,9 +1110,15 @@ export class RunScene extends Phaser.Scene {
       console.log(`[MOMENT] ${moment.objective}: Player starts with ball`);
     }
     
-    // Allow ball pickups again after a short delay to ensure physics is settled
-    this.time.delayedCall(100, () => {
+    // Allow ball pickups again after setup lock delay (prevents instant recapture)
+    // Longer delay for steal objectives to ensure enemy has clear possession
+    const setupLockMs = (moment.objective === 'turnover' || moment.objective === 'pressWin') 
+      ? TUNING.MOMENT_SETUP_LOCK_MS 
+      : 100;
+    
+    this.time.delayedCall(setupLockMs, () => {
       this.isInitializingMoment = false;
+      console.log(`[MOMENT] Setup lock released after ${setupLockMs}ms`);
     });
     
     this.audioSystem.playWhistle();
@@ -1333,23 +1442,194 @@ export class RunScene extends Phaser.Scene {
       ? (this.momentSystem.getCurrentMoment()?.duration || 45)
       : (this.momentSystem.getCurrentMoment()?.duration || 45) - (this.momentSystem.getCurrentState()?.timeRemaining || 0);
     
+    // Show Cup Run score update
+    const cupState = data.cupState;
+    if (cupState) {
+      this.toastManager.info(`Cup: You ${cupState.playerPoints} - ${cupState.enemyPoints} Enemy`, 'First to 5');
+    }
+    
     this.uiSystem.showMomentComplete(data.isWon);
     
     this.time.delayedCall(2000, () => {
       if (this.momentStats.shotsTaken > 0 || this.momentStats.tacklesWon > 0) {
         this.uiSystem.showMomentRecap(this.momentStats, () => {
-          this.proceedAfterMoment();
+          this.proceedAfterMoment(data);
         });
       } else {
-        this.proceedAfterMoment();
+        this.proceedAfterMoment(data);
       }
     });
   }
   
-  private proceedAfterMoment(): void {
+  private proceedAfterMoment(data?: any): void {
+    // Check if Cup Run is over
+    const cupState = this.momentSystem.getCupState();
+    if (cupState.isEnded) {
+      // Run ended via Cup Run - don't proceed
+      return;
+    }
+    
+    // Check for Comeback Curses trigger
+    if (data?.shouldTriggerComebackCurses) {
+      this.showComebackCursesOverlay(() => {
+        this.continueAfterCurses();
+      });
+    } else {
+      this.continueAfterCurses();
+    }
+  }
+  
+  private continueAfterCurses(): void {
     if (this.momentSystem.nextMoment()) {
       this.showUpgradeDraft();
     }
+  }
+  
+  private showComebackCursesOverlay(onComplete: () => void): void {
+    // Import curses dynamically to avoid circular deps
+    import('../data/curses').then(({ getRandomCurseOptions }) => {
+      const curseOptions = getRandomCurseOptions(2);
+      
+      // Create overlay
+      const overlay = this.add.rectangle(
+        this.cameras.main.centerX,
+        this.cameras.main.centerY,
+        this.cameras.main.width,
+        this.cameras.main.height,
+        0x000000, 0.85
+      );
+      overlay.setScrollFactor(0);
+      overlay.setDepth(1000);
+      
+      // Title
+      const title = this.add.text(
+        this.cameras.main.centerX,
+        this.cameras.main.centerY - 180,
+        '⚡ COMEBACK CURSES ⚡',
+        {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '36px',
+          color: '#ff6600',
+          fontStyle: 'bold',
+          stroke: '#000000',
+          strokeThickness: 4
+        }
+      );
+      title.setOrigin(0.5);
+      title.setScrollFactor(0);
+      title.setDepth(1001);
+      
+      const subtitle = this.add.text(
+        this.cameras.main.centerX,
+        this.cameras.main.centerY - 140,
+        "You're down by 2! Choose a curse to gain power...",
+        {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '18px',
+          color: '#ffcc00'
+        }
+      );
+      subtitle.setOrigin(0.5);
+      subtitle.setScrollFactor(0);
+      subtitle.setDepth(1001);
+      
+      // Create curse cards
+      const cardWidth = 280;
+      const cardHeight = 200;
+      const cardSpacing = 40;
+      const startX = this.cameras.main.centerX - (cardWidth + cardSpacing / 2);
+      
+      const cards: Phaser.GameObjects.Container[] = [];
+      
+      curseOptions.forEach((curse, index) => {
+        const cardX = startX + index * (cardWidth + cardSpacing);
+        const cardY = this.cameras.main.centerY + 20;
+        
+        const cardBg = this.add.rectangle(0, 0, cardWidth, cardHeight, 0x331111, 1);
+        cardBg.setStrokeStyle(3, 0xff4400);
+        
+        const icon = this.add.text(0, -70, curse.icon, { fontSize: '40px' });
+        icon.setOrigin(0.5);
+        
+        const name = this.add.text(0, -30, curse.name, {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '20px',
+          color: '#ffffff',
+          fontStyle: 'bold'
+        });
+        name.setOrigin(0.5);
+        
+        const boonText = this.add.text(0, 10, `✓ ${curse.boonDescription}`, {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '14px',
+          color: '#44ff44',
+          wordWrap: { width: cardWidth - 20 }
+        });
+        boonText.setOrigin(0.5);
+        
+        const curseText = this.add.text(0, 50, `✗ ${curse.curseDescription}`, {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '14px',
+          color: '#ff4444',
+          wordWrap: { width: cardWidth - 20 }
+        });
+        curseText.setOrigin(0.5);
+        
+        const container = this.add.container(cardX, cardY, [cardBg, icon, name, boonText, curseText]);
+        container.setScrollFactor(0);
+        container.setDepth(1002);
+        container.setSize(cardWidth, cardHeight);
+        container.setInteractive({ useHandCursor: true });
+        
+        container.on('pointerover', () => {
+          cardBg.setStrokeStyle(4, 0xffff00);
+          container.setScale(1.05);
+        });
+        
+        container.on('pointerout', () => {
+          cardBg.setStrokeStyle(3, 0xff4400);
+          container.setScale(1.0);
+        });
+        
+        container.on('pointerdown', () => {
+          // Apply the curse
+          this.momentSystem.setActiveCurse(curse.id);
+          this.applyCurse(curse);
+          
+          // Cleanup
+          overlay.destroy();
+          title.destroy();
+          subtitle.destroy();
+          cards.forEach(c => c.destroy());
+          
+          // Show toast
+          this.toastManager.info(`Curse Active: ${curse.name}`, curse.icon);
+          this.audioSystem.playUpgrade();
+          
+          onComplete();
+        });
+        
+        cards.push(container);
+      });
+    });
+  }
+  
+  private applyCurse(curse: any): void {
+    // Apply curse modifiers through upgrade system
+    if (curse.modifiers) {
+      curse.modifiers.forEach((mod: any) => {
+        this.upgradeSystem.addModifier(mod);
+      });
+    }
+    
+    // Register curse hooks
+    if (curse.hooks) {
+      curse.hooks.forEach((hook: any) => {
+        this.upgradeSystem.addHook(hook);
+      });
+    }
+    
+    console.log(`[CURSE] Applied: ${curse.name}`);
   }
   
   private showUpgradeDraft(): void {

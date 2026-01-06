@@ -22,9 +22,9 @@ export class EnemyAI extends Phaser.Physics.Arcade.Sprite {
   public isStunned: boolean = false;
   
   // Stats
-  private speed: number = 160;
-  private tackleRange: number = 40;
-  private shotPower: number = 280;
+  private speed: number = 180;
+  private tackleRange: number = 50;
+  private shotPower: number = 1100;  // Match player shot power for fairness
   
   // Visual
   private facingAngle: number = Math.PI;  // Face left by default
@@ -97,15 +97,16 @@ export class EnemyAI extends Phaser.Physics.Arcade.Sprite {
     this.setCollideWorldBounds(true);
     this.setDepth(9);
     
-    // Apply stats from config
-    this.speed = 160 * this.aiConfig.speed;
-    this.shotPower = 250 + this.aiConfig.skill * 100;
+    // Apply stats from config - STRONGER AI
+    this.speed = 180 * this.aiConfig.speed;
+    this.shotPower = 1100 + this.aiConfig.skill * 200;  // Strong shots like player
+    this.tackleRange = 50 + this.aiConfig.skill * 10;
     
     // Boss modifiers
     if (enemyType === 'boss') {
-      this.speed *= 1.2;
-      this.shotPower *= 1.3;
-      this.tackleRange *= 1.2;
+      this.speed *= 1.25;
+      this.shotPower *= 1.2;
+      this.tackleRange *= 1.3;
     }
     
     // Orange monster

@@ -88,6 +88,35 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
     this.emit('upgradeAdded', upgrade);
   }
   
+  /**
+   * Add a standalone modifier (used by Comeback Curses)
+   */
+  addModifier(mod: { stat: string; type: 'add' | 'multiply'; value: number }): void {
+    const current = this.statModifiers.get(mod.stat) || (mod.type === 'multiply' ? 1 : 0);
+    if (mod.type === 'multiply') {
+      this.statModifiers.set(mod.stat, current * mod.value);
+    } else {
+      this.statModifiers.set(mod.stat, current + mod.value);
+    }
+    console.log(`[UPGRADE] Added modifier: ${mod.stat} ${mod.type} ${mod.value}`);
+  }
+  
+  /**
+   * Add a standalone hook (used by Comeback Curses)
+   */
+  addHook(hookDef: { event: string; effect: (ctx: any) => void }): void {
+    const hookEvent = hookDef.event as UpgradeHook;
+    const effects = this.effects.get(hookEvent);
+    if (effects) {
+      effects.push({
+        upgradeId: 'curse_' + hookEvent,
+        hook: hookEvent,
+        callback: hookDef.effect
+      });
+      console.log(`[UPGRADE] Added hook: ${hookEvent}`);
+    }
+  }
+  
   private createEffect(upgrade: Upgrade, hook: UpgradeHook): UpgradeEffect | null {
     const effectId = upgrade.effectId;
     
