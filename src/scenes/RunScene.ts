@@ -8,6 +8,7 @@ import { Player } from '../entities/Player';
 import { Ball } from '../entities/Ball';
 import { TeammateAI } from '../entities/TeammateAI';
 import { EnemyAI } from '../entities/EnemyAI';
+import { EnemyGoalkeeper } from '../entities/EnemyGoalkeeper';
 import { InputSystem } from '../systems/InputSystem';
 import { UpgradeSystem } from '../systems/UpgradeSystem';
 import { MomentSystem } from '../systems/MomentSystem';
@@ -35,6 +36,7 @@ export class RunScene extends Phaser.Scene {
   private ball!: Ball;
   private teammates: TeammateAI[] = [];
   private enemies: EnemyAI[] = [];
+  private enemyGoalkeeper?: EnemyGoalkeeper;
   
   // Systems
   private inputSystem!: InputSystem;
@@ -124,6 +126,9 @@ export class RunScene extends Phaser.Scene {
     // Create UI
     this.uiSystem.createGameHUD();
     
+    // Add AI-DEFENSE v3 HUD marker (Part A)
+    this.createAIDefenseMarker();
+    
     // Initialize particles
     this.particleManager.init();
     
@@ -175,6 +180,28 @@ export class RunScene extends Phaser.Scene {
     
     (this as any).audioSystem = this.audioSystem;
     (this as any).inputSystem = this.inputSystem;
+  }
+  
+  /**
+   * Create the AI-DEFENSE v3 HUD marker (Part A)
+   * Always visible during gameplay to confirm new code is running
+   */
+  private createAIDefenseMarker(): void {
+    const marker = this.add.text(
+      this.cameras.main.width - 10,
+      10,
+      'AI-DEFENSE v3 (tackle-enforced)',
+      {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#00ff00',
+        backgroundColor: '#000000aa',
+        padding: { x: 6, y: 3 }
+      }
+    );
+    marker.setOrigin(1, 0);  // Right-aligned
+    marker.setScrollFactor(0);
+    marker.setDepth(500);
   }
   
   private createField(): void {
@@ -388,6 +415,20 @@ export class RunScene extends Phaser.Scene {
   private debugGraphics?: Phaser.GameObjects.Graphics;
   private debugText?: Phaser.GameObjects.Text;
   
+  // F4 D-circle debug
+  private debugDCircle: boolean = false;
+  private dCircleDebugGraphics?: Phaser.GameObjects.Graphics;
+  private dCircleDebugText?: Phaser.GameObjects.Text;
+  
+  // AI tackle stats (for F9 debug)
+  private tackleStats = {
+    attempts: 0,
+    successes: 0,
+    blockedByCooldown: 0,
+    blockedByAngle: 0,
+    blockedByRange: 0
+  };
+  
   private setupDebugKeys(): void {
     // G key toggles goal sensor debug view
     this.input.keyboard?.on('keydown-G', () => {
@@ -429,6 +470,16 @@ export class RunScene extends Phaser.Scene {
         console.log(`Init moment lock: ${this.isInitializingMoment}`);
         console.log('========================');
       }
+    });
+    
+    // F4 toggles D-circle debug (shows D radius and shot origin info)
+    this.input.keyboard?.on('keydown-F4', () => {
+      this.debugDCircle = !this.debugDCircle;
+      this.toastManager.info(
+        this.debugDCircle ? 'D-circle debug: ON' : 'D-circle debug: OFF',
+        'Debug'
+      );
+      this.updateDCircleDebug();
     });
     
     // F7 toggles sandbox test (places player in D with ball)
@@ -639,28 +690,139 @@ export class RunScene extends Phaser.Scene {
     const objective = this.momentSystem.getObjectiveDescriptor();
     const play = this.aiSystem.getActivePlay();
     
+    // Find primary presser for tackle debug
+    let primaryPresser: any = null;
+    let presserDist = Infinity;
+    this.enemies.forEach(e => {
+      const assignment = this.aiSystem.getDefenseAssignment(e);
+      if (assignment?.role === 'PRIMARY_PRESSER') {
+        primaryPresser = e;
+        presserDist = Phaser.Math.Distance.Between(e.x, e.y, this.player.x, this.player.y);
+      }
+    });
+    
+    // Draw tackle range circle on primary presser
+    if (primaryPresser) {
+      this.aiDebugGraphics!.lineStyle(2, 0xff0000, 0.6);
+      this.aiDebugGraphics!.strokeCircle(primaryPresser.x, primaryPresser.y, TUNING.AI_TACKLE_RANGE);
+      
+      // Draw close range (no angle check) circle
+      this.aiDebugGraphics!.lineStyle(1, 0xff6600, 0.4);
+      this.aiDebugGraphics!.strokeCircle(primaryPresser.x, primaryPresser.y, TUNING.AI_TACKLE_RANGE * TUNING.AI_TACKLE_CLOSE_RANGE_MULT);
+    }
+    
+    // Get GK info if available
+    const gkInfo = this.enemyGoalkeeper?.getDebugInfo() || { saves: 0, lunges: 0, isLunging: false };
+    
     const lines = [
-      '=== AI DEBUG (F9) ===',
+      '=== AI-DEFENSE v3 (tackle-enforced) ===',
       `Ball: ${ballOwnerType}`,
       `Objective: ${objective.type}`,
       `Active Play: ${play || 'none'}`,
       '',
-      'Enemies:',
+      '--- TACKLE STATS ---',
+      `Attempts: ${this.aiSystem.getTackleStats().attempts}`,
+      `Successes: ${this.aiSystem.getTackleStats().successes}`,
+      `Blocked (CD): ${this.aiSystem.getTackleStats().blockedByCooldown}`,
+      `Blocked (Angle): ${this.aiSystem.getTackleStats().blockedByAngle}`,
+      `Blocked (Range): ${this.aiSystem.getTackleStats().blockedByRange}`,
+      '',
+      '--- PRIMARY PRESSER ---',
+      primaryPresser ? `Dist: ${Math.round(presserDist)}px` : 'None assigned',
+      primaryPresser ? `Range: ${TUNING.AI_TACKLE_RANGE}px` : '',
+      primaryPresser ? `CD: ${TUNING.AI_TACKLE_COOLDOWN_MS}ms` : '',
+      '',
+      '--- GOALKEEPER ---',
+      `Saves: ${gkInfo.saves}`,
+      `Lunges: ${gkInfo.lunges}`,
+      `Lunging: ${gkInfo.isLunging ? 'YES' : 'no'}`,
+      '',
+      '--- ENEMIES ---',
       ...this.enemies.slice(0, 3).map((e, i) => {
         const state = e.currentState || 'unknown';
         const dist = Phaser.Math.Distance.Between(e.x, e.y, this.player.x, this.player.y);
         return `  ${i}: ${state} (${Math.round(dist)}px)`;
-      }),
-      '',
-      'Teammates:',
-      ...this.teammates.slice(0, 3).map((t, i) => {
-        const state = t.currentState || 'unknown';
-        return `  ${i}: ${state}`;
       })
     ];
     
     this.aiDebugText.setText(lines.join('\n'));
     this.aiDebugText.setVisible(true);
+  }
+  
+  /**
+   * Update D-circle debug overlay (F4)
+   * Shows D radius circles and shot origin info
+   */
+  private updateDCircleDebug(): void {
+    if (!this.dCircleDebugGraphics) {
+      this.dCircleDebugGraphics = this.add.graphics();
+      this.dCircleDebugGraphics.setDepth(98);
+    }
+    this.dCircleDebugGraphics.clear();
+    
+    if (!this.debugDCircle) {
+      this.dCircleDebugText?.setVisible(false);
+      return;
+    }
+    
+    const dRadius = TUNING.D_CIRCLE_RADIUS;
+    const goalY = this.fieldHeight / 2;
+    
+    // Draw LEFT D-circle (enemy goal - where player needs to shoot from)
+    this.dCircleDebugGraphics.lineStyle(3, 0x00ff00, 0.6);
+    this.dCircleDebugGraphics.beginPath();
+    this.dCircleDebugGraphics.arc(30, goalY, dRadius, -Math.PI / 2, Math.PI / 2, false);
+    this.dCircleDebugGraphics.strokePath();
+    
+    // Draw RIGHT D-circle (player goal - where enemy shoots from)
+    this.dCircleDebugGraphics.lineStyle(3, 0xff0000, 0.6);
+    this.dCircleDebugGraphics.beginPath();
+    this.dCircleDebugGraphics.arc(this.fieldWidth - 30, goalY, dRadius, Math.PI / 2, -Math.PI / 2, false);
+    this.dCircleDebugGraphics.strokePath();
+    
+    // Fill attacking D with semi-transparent green
+    this.dCircleDebugGraphics.fillStyle(0x00ff00, 0.15);
+    this.dCircleDebugGraphics.beginPath();
+    this.dCircleDebugGraphics.arc(this.fieldWidth - 30, goalY, dRadius, Math.PI / 2, -Math.PI / 2, false);
+    this.dCircleDebugGraphics.fillPath();
+    
+    // Check if player is in attacking D
+    const playerInD = this.isPointInAttackingD('player', this.player.x, this.player.y);
+    
+    // Highlight player if in D
+    if (playerInD) {
+      this.dCircleDebugGraphics.lineStyle(4, 0x00ff00, 1);
+      this.dCircleDebugGraphics.strokeCircle(this.player.x, this.player.y, 25);
+    }
+    
+    // Create/update info text
+    if (!this.dCircleDebugText) {
+      this.dCircleDebugText = this.add.text(10, this.cameras.main.height - 100, '', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#00ffff',
+        backgroundColor: '#000000cc',
+        padding: { x: 8, y: 6 }
+      });
+      this.dCircleDebugText.setScrollFactor(0);
+      this.dCircleDebugText.setDepth(500);
+    }
+    
+    const shotInfo = this.ball;
+    const lines = [
+      '=== D-CIRCLE DEBUG (F4) ===',
+      `Player In Attacking D: ${playerInD ? 'YES ✓' : 'NO ✗'}`,
+      `D Radius: ${dRadius}px`,
+      '',
+      '--- LAST SHOT ---',
+      `Team: ${shotInfo.lastShotTeam}`,
+      `From Inside D: ${shotInfo.lastShotFromInsideD ? 'YES ✓' : 'NO ✗'}`,
+      `Recent: ${shotInfo.isLastShotRecent() ? 'YES' : 'expired'}`,
+      `Origin: (${Math.round(shotInfo.lastShotX)}, ${Math.round(shotInfo.lastShotY)})`
+    ];
+    
+    this.dCircleDebugText.setText(lines.join('\n'));
+    this.dCircleDebugText.setVisible(true);
   }
   
   private debugStealMoment: boolean = false;
@@ -1079,6 +1241,10 @@ export class RunScene extends Phaser.Scene {
     this.player.onShoot = (power, angle) => {
       this.audioSystem.playShoot();
       
+      // Record shot origin BEFORE the kick (Part B: D-circle scoring rule)
+      const isInsideD = this.isPointInAttackingD('player', this.player.x, this.player.y);
+      this.ball.recordShotOrigin(this.player.x, this.player.y, 'player', isInsideD);
+      
       // Use the Ball's kick method with the calculated power
       const direction = { x: Math.cos(angle), y: Math.sin(angle) };
       this.ball.kick(direction, power, TUNING.SHOT_SPIN_BASE * (Math.random() - 0.5), 'shot');
@@ -1161,8 +1327,34 @@ export class RunScene extends Phaser.Scene {
     // Create enemies
     this.createEnemies(3);
     
+    // Create enemy goalkeeper (Part C)
+    this.createEnemyGoalkeeper();
+    
     // Set entity references
     this.updateEntityReferences();
+  }
+  
+  /**
+   * Create enemy goalkeeper (Part C)
+   */
+  private createEnemyGoalkeeper(): void {
+    if (!TUNING.GK_ENABLED) return;
+    
+    // Destroy old GK if exists
+    this.enemyGoalkeeper?.destroy();
+    
+    // Create new GK
+    this.enemyGoalkeeper = new EnemyGoalkeeper(this, this.fieldWidth, this.fieldHeight);
+    this.enemyGoalkeeper.setBall(this.ball);
+    
+    // Setup collision with ball
+    this.physics.add.overlap(this.enemyGoalkeeper, this.ball, () => {
+      if (this.ball.isLoose && this.ball.getSpeed() > 80) {
+        this.enemyGoalkeeper!.onBallContact(this.ball);
+      }
+    });
+    
+    console.log('[GK] Enemy goalkeeper created');
   }
   
   private createTeammates(count: number): void {
@@ -1192,6 +1384,10 @@ export class RunScene extends Phaser.Scene {
       );
       
       teammate.onShoot = (power, angle) => {
+        // Record shot origin BEFORE the kick (Part B: D-circle scoring rule)
+        const isInsideD = this.isPointInAttackingD('player', teammate.x, teammate.y);
+        this.ball.recordShotOrigin(teammate.x, teammate.y, 'player', isInsideD);
+        
         const direction = { x: Math.cos(angle), y: Math.sin(angle) };
         this.ball.kick(direction, power, 0, 'shot');
         this.ball.lastShooter = teammate;
@@ -1260,6 +1456,10 @@ export class RunScene extends Phaser.Scene {
       );
       
       enemy.onShoot = (power, angle) => {
+        // Record shot origin BEFORE the kick (Part B: D-circle scoring rule)
+        const isInsideD = this.isPointInAttackingD('enemy', enemy.x, enemy.y);
+        this.ball.recordShotOrigin(enemy.x, enemy.y, 'enemy', isInsideD);
+        
         const direction = { x: Math.cos(angle), y: Math.sin(angle) };
         this.ball.kick(direction, power, 0, 'shot');
         this.ball.lastShooter = enemy;
@@ -1443,8 +1643,78 @@ export class RunScene extends Phaser.Scene {
     const speed = this.ball.getSpeed();
     if (speed < TUNING.GOAL_MIN_SPEED) return;
     
+    // === PART B: D-CIRCLE SCORING RULE ===
+    // Only apply to scoring-type moments
+    const moment = this.momentSystem.getCurrentMoment();
+    const scoringObjectives = ['score', 'multiGoal', 'reboundGoal', 'assist', 'giveAndGo', 'penaltyCorner', 'pc_score', 'pcBattle'];
+    const isScoringMoment = !moment || scoringObjectives.includes(moment.objective);
+    
+    if (TUNING.REQUIRE_SHOT_FROM_D && isScoringMoment) {
+      // Determine which team is scoring
+      const scoringTeam = isRightGoal ? 'player' : 'enemy';
+      
+      // Check if shot was from inside D
+      const validShot = this.ball.lastShotTeam === scoringTeam && 
+                        this.ball.lastShotFromInsideD && 
+                        this.ball.isLastShotRecent();
+      
+      if (!validShot) {
+        // NO GOAL - shot from outside D
+        this.showNoGoalFeedback(isRightGoal);
+        return;
+      }
+    }
+    
     // GOAL!
     this.scoreGoal(isRightGoal);
+  }
+  
+  /**
+   * Show "NO GOAL" feedback when shot was from outside the D
+   */
+  private showNoGoalFeedback(isRightGoal: boolean): void {
+    console.log(`[NO_GOAL] Shot was from outside the D`);
+    
+    // Play whistle sound
+    this.audioSystem.playWhistle();
+    
+    // Show floating text
+    const text = this.add.text(
+      this.ball.x,
+      this.ball.y - 30,
+      'NO GOAL\nShot outside the D',
+      {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '22px',
+        color: '#ff4444',
+        align: 'center',
+        stroke: '#000000',
+        strokeThickness: 4
+      }
+    );
+    text.setOrigin(0.5);
+    text.setDepth(200);
+    
+    // Animate
+    this.tweens.add({
+      targets: text,
+      y: text.y - 60,
+      alpha: 0,
+      duration: 1500,
+      ease: 'Quad.easeOut',
+      onComplete: () => text.destroy()
+    });
+    
+    // Brief cooldown to prevent spam
+    this.goalCooldownUntil = this.time.now + 800;
+    
+    // Reset ball to center (simplified reset)
+    this.time.delayedCall(500, () => {
+      if (!this.isGoalScored) {
+        this.ball.resetToCenter();
+        this.ball.setPosition(this.fieldWidth / 2, this.fieldHeight / 2);
+      }
+    });
   }
   
   private bounceFromNet(isLeftNet: boolean): void {
@@ -1605,6 +1875,10 @@ export class RunScene extends Phaser.Scene {
     // Create teammates and enemies with proper kickoff positions
     this.createTeammates(moment.teamSize.player - 1);
     this.createEnemies(moment.teamSize.enemy, moment.isBoss);
+    
+    // Recreate enemy goalkeeper for each moment (Part C)
+    this.createEnemyGoalkeeper();
+    
     this.updateEntityReferences();
     this.setupCollisions();
     
@@ -1867,8 +2141,16 @@ export class RunScene extends Phaser.Scene {
     if (dist < tackleRange) {
       const tackleSuccess = TUNING.TACKLE_SUCCESS_BASE + (tackler.stats?.tackle || 5) * TUNING.TACKLE_SUCCESS_SCALE;
       
+      // Track if tackler is AI enemy (for AI-DEFENSE v3 stats)
+      const tacklerIsAI = this.enemies.includes(tackler);
+      
       if (Math.random() < tackleSuccess) {
         // === SUCCESSFUL TACKLE - IMPACTFUL! ===
+        
+        // Record AI tackle success (Part A)
+        if (tacklerIsAI) {
+          this.aiSystem.recordTackleAttempt(true);
+        }
         
         // 1) Apply hitstop to both for micro-freeze impact feel
         if (tackler.applyHitstop) tackler.applyHitstop(TUNING.TACKLE_HITSTOP_MS);
@@ -1961,6 +2243,11 @@ export class RunScene extends Phaser.Scene {
       } else {
         // Failed tackle - tackler bounces off and gets minor stun
         tackler.applyStun(180);
+        
+        // Record AI tackle failure (Part A)
+        if (tacklerIsAI) {
+          this.aiSystem.recordTackleAttempt(false);
+        }
         
         // Set tackle backoff so AI doesn't spam tackle attempts
         this.aiSystem.setTackleBackoff(tackler, TUNING.AI_TACKLE_BACKOFF_MS);
@@ -2426,6 +2713,14 @@ export class RunScene extends Phaser.Scene {
     
     // Update enemies
     this.enemies.forEach((e) => e.update(delta));
+    
+    // Update enemy goalkeeper (Part C)
+    this.enemyGoalkeeper?.update(delta);
+    
+    // Update D-circle debug if enabled (Part B)
+    if (this.debugDCircle) {
+      this.updateDCircleDebug();
+    }
     
     // Update trails
     if (this.player.isMoving) {

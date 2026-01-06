@@ -71,6 +71,15 @@ export class AISystem {
   // Failed tackle cooldown (prevents spam)
   private tackleBackoffUntil: Map<any, number> = new Map();
   
+  // AI-DEFENSE v3: Tackle statistics for F9 debug
+  private tackleStats = {
+    attempts: 0,
+    successes: 0,
+    blockedByCooldown: 0,
+    blockedByAngle: 0,
+    blockedByRange: 0
+  };
+  
   // Stuck detection
   private entityLastPositions: Map<any, { x: number; y: number; time: number }> = new Map();
   
@@ -497,19 +506,45 @@ export class AISystem {
     
     switch (assignment.role) {
       case 'PRIMARY_PRESSER':
-        // In commit mode - attempt tackle
+        // AI-DEFENSE v3: Aggressive tackle enforcement
+        // In commit mode or within tackle range - attempt tackle with willingness check
         if (assignment.inCommitMode || dist < TUNING.AI_TACKLE_RANGE) {
-          if (!this.isTackleOnCooldown(entity) && dist < TUNING.AI_TACKLE_RANGE_COMMIT) {
-            return { action: 'tackle', targetEntity: carrier, priority: 10 };
+          // Check cooldown
+          if (this.isTackleOnCooldown(entity)) {
+            this.recordTackleBlocked('cooldown');
+          } else if (dist < TUNING.AI_TACKLE_RANGE_COMMIT) {
+            // Close range - check if VERY close (ignore angle)
+            const isVeryClose = dist < TUNING.AI_TACKLE_RANGE * TUNING.AI_TACKLE_CLOSE_RANGE_MULT;
+            
+            // Calculate angle check
+            const dx = carrier.x - entity.x;
+            const dy = carrier.y - entity.y;
+            const vel = entity.body?.velocity || { x: 0, y: 0 };
+            const velMag = Math.sqrt(vel.x * vel.x + vel.y * vel.y) || 1;
+            const dotProduct = (dx * vel.x + dy * vel.y) / (dist * velMag);
+            const angleOK = isVeryClose || dotProduct > TUNING.AI_TACKLE_ANGLE_COS;
+            
+            if (!angleOK) {
+              this.recordTackleBlocked('angle');
+            } else if (Math.random() < TUNING.AI_TACKLE_WILLINGNESS) {
+              // Tackle attempt!
+              return { action: 'tackle', targetEntity: carrier, priority: 10 };
+            }
+          } else {
+            this.recordTackleBlocked('range');
           }
         }
         // Sprint directly at carrier
         return { action: 'move', targetX: carrier.x, targetY: carrier.y, priority: 9 };
         
       case 'SECOND_PRESSER':
-        // Also try to tackle if close
-        if (dist < TUNING.AI_TACKLE_RANGE && !this.isTackleOnCooldown(entity)) {
-          return { action: 'tackle', targetEntity: carrier, priority: 9 };
+        // Also try to tackle if close - AI-DEFENSE v3
+        if (dist < TUNING.AI_TACKLE_RANGE) {
+          if (this.isTackleOnCooldown(entity)) {
+            this.recordTackleBlocked('cooldown');
+          } else if (Math.random() < TUNING.AI_TACKLE_WILLINGNESS * 0.8) {  // Slightly less aggressive
+            return { action: 'tackle', targetEntity: carrier, priority: 9 };
+          }
         }
         return { action: 'move', targetX: assignment.target.x, targetY: assignment.target.y, priority: 8 };
         
@@ -829,6 +864,40 @@ export class AISystem {
   
   setTackleBackoff(entity: any, duration: number = 800): void {
     this.tackleBackoffUntil.set(entity, this.scene.time.now + duration);
+  }
+  
+  /**
+   * AI-DEFENSE v3: Record a tackle attempt
+   */
+  recordTackleAttempt(success: boolean): void {
+    this.tackleStats.attempts++;
+    if (success) {
+      this.tackleStats.successes++;
+    }
+  }
+  
+  /**
+   * AI-DEFENSE v3: Record blocked tackle reason
+   */
+  recordTackleBlocked(reason: 'cooldown' | 'angle' | 'range'): void {
+    switch (reason) {
+      case 'cooldown':
+        this.tackleStats.blockedByCooldown++;
+        break;
+      case 'angle':
+        this.tackleStats.blockedByAngle++;
+        break;
+      case 'range':
+        this.tackleStats.blockedByRange++;
+        break;
+    }
+  }
+  
+  /**
+   * Get tackle stats for F9 debug overlay
+   */
+  getTackleStats(): { attempts: number; successes: number; blockedByCooldown: number; blockedByAngle: number; blockedByRange: number } {
+    return { ...this.tackleStats };
   }
   
   private canChaseLooseBall(entity: any, ball: any, allTeam: any[], isPlayerTeam: boolean): boolean {
