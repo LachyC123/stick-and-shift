@@ -133,8 +133,8 @@ export class MenuScene extends Phaser.Scene {
   
   private createMenuButtons(): void {
     const centerX = this.cameras.main.centerX;
-    const startY = 260;
-    const spacing = 70;
+    const startY = 240;
+    const spacing = 60;
     
     // Play button
     new Button(this, {
@@ -159,9 +159,9 @@ export class MenuScene extends Phaser.Scene {
       x: centerX,
       y: startY + spacing,
       width: 250,
-      height: 55,
+      height: 50,
       text: '🛒 STORE',
-      fontSize: 24,
+      fontSize: 22,
       onClick: () => {
         this.audioSystem.playClick();
         this.cameras.main.fadeOut(300);
@@ -179,23 +179,37 @@ export class MenuScene extends Phaser.Scene {
       x: centerX,
       y: startY + spacing * 2,
       width: 250,
-      height: 55,
+      height: 50,
       text: `🎯 CHALLENGES (${completedCount}/${totalCount})`,
-      fontSize: 20,
+      fontSize: 18,
       onClick: () => {
         this.audioSystem.playClick();
         this.showChallenges();
       }
     });
     
-    // Settings button
+    // Controls button - NEW prominent button
     new Button(this, {
       x: centerX,
       y: startY + spacing * 3,
       width: 250,
-      height: 55,
+      height: 50,
+      text: '🎮 CONTROLS',
+      fontSize: 22,
+      onClick: () => {
+        this.audioSystem.playClick();
+        this.showControls();
+      }
+    });
+    
+    // Settings button
+    new Button(this, {
+      x: centerX,
+      y: startY + spacing * 4,
+      width: 250,
+      height: 50,
       text: '⚙️ SETTINGS',
-      fontSize: 24,
+      fontSize: 22,
       style: 'secondary',
       onClick: () => {
         this.audioSystem.playClick();
@@ -317,6 +331,110 @@ export class MenuScene extends Phaser.Scene {
       text: 'Close',
       style: 'secondary',
       onClick: () => {
+        overlay.destroy();
+        panel.destroy();
+        closeBtn.destroy();
+      }
+    });
+  }
+  
+  private showControls(): void {
+    const width = this.cameras.main.width;
+    const height = this.cameras.main.height;
+    
+    // Create controls overlay
+    const overlay = this.add.rectangle(
+      this.cameras.main.centerX,
+      this.cameras.main.centerY,
+      width,
+      height,
+      0x000000,
+      0.8
+    );
+    overlay.setInteractive();
+    
+    const panel = this.add.container(this.cameras.main.centerX, this.cameras.main.centerY);
+    
+    // Panel background
+    const bg = this.add.graphics();
+    bg.fillStyle(0x1a1a2e, 1);
+    bg.fillRoundedRect(-250, -220, 500, 440, 20);
+    bg.lineStyle(3, 0x3498db, 0.8);
+    bg.strokeRoundedRect(-250, -220, 500, 440, 20);
+    panel.add(bg);
+    
+    // Title
+    const title = this.add.text(0, -190, '🎮 CONTROLS', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '28px',
+      color: '#3498db',
+      fontStyle: 'bold'
+    });
+    title.setOrigin(0.5);
+    panel.add(title);
+    
+    // Controls list
+    const controls = [
+      { key: 'WASD / Arrow Keys', action: 'Move your player' },
+      { key: 'SPACE / Left Click', action: 'Shoot the ball (with possession)' },
+      { key: 'E', action: 'Pass to nearest teammate' },
+      { key: 'Q', action: 'Tackle (lunge to steal ball)' },
+      { key: 'SHIFT', action: 'Dodge / Sidestep with i-frames' },
+      { key: 'Mouse', action: 'Aim direction' },
+      { key: 'ESC / P', action: 'Pause the game' },
+      { key: 'H', action: 'Toggle controls help (in-game)' }
+    ];
+    
+    const startY = -130;
+    controls.forEach((control, i) => {
+      const y = startY + i * 40;
+      
+      // Key box
+      const keyBg = this.add.graphics();
+      keyBg.fillStyle(0x2c3e50, 1);
+      keyBg.fillRoundedRect(-220, y - 14, 160, 28, 6);
+      panel.add(keyBg);
+      
+      const keyText = this.add.text(-140, y, control.key, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#3498db',
+        fontStyle: 'bold'
+      });
+      keyText.setOrigin(0.5);
+      panel.add(keyText);
+      
+      // Action text
+      const actionText = this.add.text(-40, y, control.action, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: '#ecf0f1'
+      });
+      actionText.setOrigin(0, 0.5);
+      panel.add(actionText);
+    });
+    
+    // Tips
+    const tips = this.add.text(0, 160, '💡 TIP: When using keyboard only, shots auto-aim toward the goal!', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '13px',
+      color: '#f39c12',
+      wordWrap: { width: 420 },
+      align: 'center'
+    });
+    tips.setOrigin(0.5);
+    panel.add(tips);
+    
+    // Close button
+    const closeBtn = new Button(this, {
+      x: this.cameras.main.centerX,
+      y: this.cameras.main.centerY + 195,
+      width: 150,
+      height: 45,
+      text: 'Got It!',
+      style: 'success',
+      onClick: () => {
+        this.audioSystem.playClick();
         overlay.destroy();
         panel.destroy();
         closeBtn.destroy();

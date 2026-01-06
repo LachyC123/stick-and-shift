@@ -1,8 +1,22 @@
 // UISystem for Stick & Shift
-// Manages HUD, cooldown displays, and UI state
+// Manages HUD, cooldown displays, radar, controls overlay
+// Improved: mini radar, controls panel, help button, post-moment recap
 
 import Phaser from 'phaser';
 import { MomentState } from './MomentSystem';
+
+export interface MomentRecapStats {
+  goalsScored: number;
+  goalsConceded: number;
+  tacklesWon: number;
+  tacklesLost: number;
+  passesCompleted: number;
+  passesAttempted: number;
+  shotsOnTarget: number;
+  shotsTaken: number;
+  possessionTime: number;
+  totalTime: number;
+}
 
 export class UISystem {
   private scene: Phaser.Scene;
@@ -24,6 +38,24 @@ export class UISystem {
   // Upgrade display
   private upgradeContainer?: Phaser.GameObjects.Container;
   
+  // Mini radar
+  private radarContainer?: Phaser.GameObjects.Container;
+  private radarBg?: Phaser.GameObjects.Graphics;
+  private radarDots: Map<string, Phaser.GameObjects.Arc> = new Map();
+  private radarScale: number = 0.12;
+  private radarWidth: number = 140;
+  private radarHeight: number = 80;
+  
+  // Help button
+  private helpButton?: Phaser.GameObjects.Container;
+  
+  // Controls overlay
+  private controlsOverlay?: Phaser.GameObjects.Container;
+  private controlsVisible: boolean = false;
+  
+  // Pause menu
+  private pauseOverlay?: Phaser.GameObjects.Container;
+  
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
     this.container = scene.add.container(0, 0);
@@ -34,6 +66,7 @@ export class UISystem {
   // Create the game HUD
   createGameHUD(): void {
     const width = this.scene.cameras.main.width;
+    const height = this.scene.cameras.main.height;
     
     // Timer background
     this.timerBg = this.scene.add.graphics();
@@ -93,7 +126,7 @@ export class UISystem {
     this.container.add(this.possessionText);
     
     // Cooldown container (bottom center)
-    this.cooldownContainer = this.scene.add.container(width / 2, this.scene.cameras.main.height - 60);
+    this.cooldownContainer = this.scene.add.container(width / 2, height - 60);
     this.cooldownContainer.setScrollFactor(0);
     this.container.add(this.cooldownContainer);
     
@@ -103,13 +136,22 @@ export class UISystem {
     this.upgradeContainer = this.scene.add.container(20, 150);
     this.upgradeContainer.setScrollFactor(0);
     this.container.add(this.upgradeContainer);
+    
+    // Create mini radar (bottom right)
+    this.createMiniRadar();
+    
+    // Create help button (top right, below possession)
+    this.createHelpButton();
+    
+    // Create controls overlay (hidden by default)
+    this.createControlsOverlay();
   }
   
   private createCooldownIcons(): void {
     if (!this.cooldownContainer) return;
     
     const actions = [
-      { key: 'shoot', label: 'SPACE', icon: '🏑' },
+      { key: 'shoot', label: 'SPACE/Click', icon: '🏑' },
       { key: 'pass', label: 'E', icon: '📐' },
       { key: 'tackle', label: 'Q', icon: '⚔️' },
       { key: 'dodge', label: 'SHIFT', icon: '💨' }
@@ -140,13 +182,505 @@ export class UISystem {
       // Key label
       const label = this.scene.add.text(x, 20, action.label, {
         fontFamily: 'Arial, sans-serif',
-        fontSize: '10px',
+        fontSize: '9px',
         color: '#bdc3c7'
       });
       label.setOrigin(0.5);
       this.cooldownContainer!.add(label);
       
       this.cooldownIcons.set(action.key, { bg, overlay, label });
+    });
+  }
+  
+  private createMiniRadar(): void {
+    const width = this.scene.cameras.main.width;
+    const height = this.scene.cameras.main.height;
+    
+    this.radarContainer = this.scene.add.container(width - this.radarWidth - 15, height - this.radarHeight - 100);
+    this.radarContainer.setScrollFactor(0);
+    this.container.add(this.radarContainer);
+    
+    // Radar background
+    this.radarBg = this.scene.add.graphics();
+    this.radarBg.fillStyle(0x1a1a2e, 0.7);
+    this.radarBg.fillRoundedRect(0, 0, this.radarWidth, this.radarHeight, 5);
+    this.radarBg.lineStyle(1, 0x3498db, 0.6);
+    this.radarBg.strokeRoundedRect(0, 0, this.radarWidth, this.radarHeight, 5);
+    
+    // Field markings
+    this.radarBg.lineStyle(1, 0x666666, 0.4);
+    this.radarBg.beginPath();
+    this.radarBg.moveTo(this.radarWidth / 2, 0);
+    this.radarBg.lineTo(this.radarWidth / 2, this.radarHeight);
+    this.radarBg.strokePath();
+    
+    // Center circle
+    this.radarBg.strokeCircle(this.radarWidth / 2, this.radarHeight / 2, 8);
+    
+    this.radarContainer.add(this.radarBg);
+    
+    // Label
+    const label = this.scene.add.text(this.radarWidth / 2, -8, 'RADAR', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '9px',
+      color: '#666666'
+    });
+    label.setOrigin(0.5);
+    this.radarContainer.add(label);
+  }
+  
+  // Update radar with entity positions
+  updateRadar(player: any, teammates: any[], enemies: any[], ball: any): void {
+    if (!this.radarContainer) return;
+    
+    // Clear old dots
+    this.radarDots.forEach(dot => dot.destroy());
+    this.radarDots.clear();
+    
+    const fieldWidth = 1200;
+    const fieldHeight = 700;
+    
+    // Helper to convert world position to radar position
+    const toRadar = (x: number, y: number) => ({
+      x: (x / fieldWidth) * this.radarWidth,
+      y: (y / fieldHeight) * this.radarHeight
+    });
+    
+    // Ball (white)
+    if (ball) {
+      const ballPos = toRadar(ball.x, ball.y);
+      const ballDot = this.scene.add.circle(ballPos.x, ballPos.y, 3, 0xffffff);
+      this.radarContainer.add(ballDot);
+      this.radarDots.set('ball', ballDot);
+    }
+    
+    // Player (green, larger)
+    if (player) {
+      const playerPos = toRadar(player.x, player.y);
+      const playerDot = this.scene.add.circle(playerPos.x, playerPos.y, 4, 0x27ae60);
+      this.radarContainer.add(playerDot);
+      this.radarDots.set('player', playerDot);
+    }
+    
+    // Teammates (green, smaller)
+    teammates.forEach((t, i) => {
+      const pos = toRadar(t.x, t.y);
+      const dot = this.scene.add.circle(pos.x, pos.y, 3, 0x2ecc71);
+      this.radarContainer!.add(dot);
+      this.radarDots.set(`teammate_${i}`, dot);
+    });
+    
+    // Enemies (red)
+    enemies.forEach((e, i) => {
+      const pos = toRadar(e.x, e.y);
+      const dot = this.scene.add.circle(pos.x, pos.y, 3, 0xe74c3c);
+      this.radarContainer!.add(dot);
+      this.radarDots.set(`enemy_${i}`, dot);
+    });
+  }
+  
+  private createHelpButton(): void {
+    const width = this.scene.cameras.main.width;
+    
+    this.helpButton = this.scene.add.container(width - 30, 60);
+    this.helpButton.setScrollFactor(0);
+    this.container.add(this.helpButton);
+    
+    const bg = this.scene.add.circle(0, 0, 15, 0x2c3e50);
+    bg.setStrokeStyle(2, 0x3498db);
+    bg.setInteractive({ useHandCursor: true });
+    this.helpButton.add(bg);
+    
+    const text = this.scene.add.text(0, 0, '?', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '18px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    });
+    text.setOrigin(0.5);
+    this.helpButton.add(text);
+    
+    // Click handler
+    bg.on('pointerdown', () => {
+      this.toggleControlsOverlay();
+    });
+    
+    bg.on('pointerover', () => {
+      bg.setFillStyle(0x3498db);
+      this.scene.tweens.add({
+        targets: this.helpButton,
+        scaleX: 1.1,
+        scaleY: 1.1,
+        duration: 100
+      });
+    });
+    
+    bg.on('pointerout', () => {
+      bg.setFillStyle(0x2c3e50);
+      this.scene.tweens.add({
+        targets: this.helpButton,
+        scaleX: 1,
+        scaleY: 1,
+        duration: 100
+      });
+    });
+  }
+  
+  private createControlsOverlay(): void {
+    const width = this.scene.cameras.main.width;
+    const height = this.scene.cameras.main.height;
+    
+    this.controlsOverlay = this.scene.add.container(0, 0);
+    this.controlsOverlay.setScrollFactor(0);
+    this.controlsOverlay.setDepth(200);
+    this.controlsOverlay.setVisible(false);
+    
+    // Dim background
+    const bg = this.scene.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7);
+    bg.setInteractive();
+    bg.on('pointerdown', () => this.hideControlsOverlay());
+    this.controlsOverlay.add(bg);
+    
+    // Panel
+    const panelWidth = 450;
+    const panelHeight = 380;
+    const panel = this.scene.add.graphics();
+    panel.fillStyle(0x1a1a2e, 0.95);
+    panel.fillRoundedRect(width / 2 - panelWidth / 2, height / 2 - panelHeight / 2, panelWidth, panelHeight, 15);
+    panel.lineStyle(3, 0x3498db, 1);
+    panel.strokeRoundedRect(width / 2 - panelWidth / 2, height / 2 - panelHeight / 2, panelWidth, panelHeight, 15);
+    this.controlsOverlay.add(panel);
+    
+    // Title
+    const title = this.scene.add.text(width / 2, height / 2 - panelHeight / 2 + 30, '🎮 CONTROLS', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '24px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    });
+    title.setOrigin(0.5);
+    this.controlsOverlay.add(title);
+    
+    // Controls list
+    const controls = [
+      { key: 'WASD / Arrows', action: 'Move' },
+      { key: 'SPACE / Left Click', action: 'Shoot (with ball) / Tackle intent' },
+      { key: 'E', action: 'Pass to teammate' },
+      { key: 'Q', action: 'Tackle (lunge to steal ball)' },
+      { key: 'SHIFT', action: 'Dodge / Sidestep' },
+      { key: 'Mouse', action: 'Aim direction' },
+      { key: 'ESC / P', action: 'Pause game' },
+      { key: 'H', action: 'Toggle this help' }
+    ];
+    
+    const startY = height / 2 - panelHeight / 2 + 80;
+    controls.forEach((control, i) => {
+      const y = startY + i * 32;
+      
+      // Key
+      const keyBg = this.scene.add.graphics();
+      keyBg.fillStyle(0x2c3e50, 1);
+      keyBg.fillRoundedRect(width / 2 - 200, y - 10, 140, 26, 5);
+      this.controlsOverlay!.add(keyBg);
+      
+      const keyText = this.scene.add.text(width / 2 - 130, y, control.key, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#3498db',
+        fontStyle: 'bold'
+      });
+      keyText.setOrigin(0.5);
+      this.controlsOverlay!.add(keyText);
+      
+      // Action
+      const actionText = this.scene.add.text(width / 2 + 30, y, control.action, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: '#ecf0f1'
+      });
+      actionText.setOrigin(0, 0.5);
+      this.controlsOverlay!.add(actionText);
+    });
+    
+    // Tips section
+    const tipsY = height / 2 + panelHeight / 2 - 60;
+    const tips = this.scene.add.text(width / 2, tipsY, '💡 TIP: Aim toward goal for auto-aim assist when using keyboard only', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '12px',
+      color: '#f39c12',
+      wordWrap: { width: panelWidth - 40 },
+      align: 'center'
+    });
+    tips.setOrigin(0.5);
+    this.controlsOverlay.add(tips);
+    
+    // Close button
+    const closeBtn = this.scene.add.text(width / 2, height / 2 + panelHeight / 2 - 25, '[ Click anywhere to close ]', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '12px',
+      color: '#7f8c8d'
+    });
+    closeBtn.setOrigin(0.5);
+    this.controlsOverlay.add(closeBtn);
+  }
+  
+  toggleControlsOverlay(): void {
+    if (this.controlsVisible) {
+      this.hideControlsOverlay();
+    } else {
+      this.showControlsOverlay();
+    }
+  }
+  
+  showControlsOverlay(): void {
+    if (!this.controlsOverlay) return;
+    this.controlsOverlay.setVisible(true);
+    this.controlsVisible = true;
+    
+    // Animate in
+    this.controlsOverlay.setAlpha(0);
+    this.scene.tweens.add({
+      targets: this.controlsOverlay,
+      alpha: 1,
+      duration: 200
+    });
+  }
+  
+  hideControlsOverlay(): void {
+    if (!this.controlsOverlay) return;
+    
+    this.scene.tweens.add({
+      targets: this.controlsOverlay,
+      alpha: 0,
+      duration: 150,
+      onComplete: () => {
+        this.controlsOverlay!.setVisible(false);
+        this.controlsVisible = false;
+      }
+    });
+  }
+  
+  isControlsVisible(): boolean {
+    return this.controlsVisible;
+  }
+  
+  // Show first-run tutorial
+  showFirstRunTutorial(onDismiss: () => void): void {
+    const width = this.scene.cameras.main.width;
+    const height = this.scene.cameras.main.height;
+    
+    const tutorial = this.scene.add.container(0, 0);
+    tutorial.setScrollFactor(0);
+    tutorial.setDepth(250);
+    
+    // Semi-transparent background
+    const bg = this.scene.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.8);
+    tutorial.add(bg);
+    
+    // Panel
+    const panelWidth = 500;
+    const panelHeight = 350;
+    const panel = this.scene.add.graphics();
+    panel.fillStyle(0x1a1a2e, 0.95);
+    panel.fillRoundedRect(width / 2 - panelWidth / 2, height / 2 - panelHeight / 2, panelWidth, panelHeight, 15);
+    panel.lineStyle(3, 0xf39c12, 1);
+    panel.strokeRoundedRect(width / 2 - panelWidth / 2, height / 2 - panelHeight / 2, panelWidth, panelHeight, 15);
+    tutorial.add(panel);
+    
+    // Title
+    const title = this.scene.add.text(width / 2, height / 2 - 140, '🏑 WELCOME TO STICK & SHIFT!', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '22px',
+      color: '#f39c12',
+      fontStyle: 'bold'
+    });
+    title.setOrigin(0.5);
+    tutorial.add(title);
+    
+    // Quick controls
+    const controlsText = this.scene.add.text(width / 2, height / 2 - 50, 
+      'QUICK CONTROLS:\n\n' +
+      '⬆️⬇️⬅️➡️  WASD / Arrows = Move\n' +
+      '🏑  SPACE / Click = Shoot\n' +
+      '📐  E = Pass\n' +
+      '⚔️  Q = Tackle\n' +
+      '💨  SHIFT = Dodge', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '16px',
+      color: '#ecf0f1',
+      align: 'center',
+      lineSpacing: 6
+    });
+    controlsText.setOrigin(0.5);
+    tutorial.add(controlsText);
+    
+    // Dismiss button
+    const btnBg = this.scene.add.graphics();
+    btnBg.fillStyle(0x27ae60, 1);
+    btnBg.fillRoundedRect(width / 2 - 80, height / 2 + 100, 160, 45, 10);
+    tutorial.add(btnBg);
+    
+    const btnText = this.scene.add.text(width / 2, height / 2 + 122, "LET'S GO!", {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '18px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    });
+    btnText.setOrigin(0.5);
+    tutorial.add(btnText);
+    
+    // Make interactive
+    const hitArea = this.scene.add.rectangle(width / 2, height / 2 + 122, 160, 45, 0x000000, 0);
+    hitArea.setInteractive({ useHandCursor: true });
+    tutorial.add(hitArea);
+    
+    hitArea.on('pointerdown', () => {
+      this.scene.tweens.add({
+        targets: tutorial,
+        alpha: 0,
+        duration: 200,
+        onComplete: () => {
+          tutorial.destroy();
+          onDismiss();
+        }
+      });
+    });
+    
+    hitArea.on('pointerover', () => {
+      btnBg.clear();
+      btnBg.fillStyle(0x2ecc71, 1);
+      btnBg.fillRoundedRect(width / 2 - 80, height / 2 + 100, 160, 45, 10);
+    });
+    
+    hitArea.on('pointerout', () => {
+      btnBg.clear();
+      btnBg.fillStyle(0x27ae60, 1);
+      btnBg.fillRoundedRect(width / 2 - 80, height / 2 + 100, 160, 45, 10);
+    });
+    
+    // Auto-dismiss after 6 seconds
+    this.scene.time.delayedCall(6000, () => {
+      if (tutorial.active) {
+        this.scene.tweens.add({
+          targets: tutorial,
+          alpha: 0,
+          duration: 300,
+          onComplete: () => {
+            if (tutorial.active) {
+              tutorial.destroy();
+              onDismiss();
+            }
+          }
+        });
+      }
+    });
+  }
+  
+  // Show moment recap
+  showMomentRecap(stats: MomentRecapStats, onContinue: () => void): void {
+    const width = this.scene.cameras.main.width;
+    const height = this.scene.cameras.main.height;
+    
+    const recap = this.scene.add.container(0, 0);
+    recap.setScrollFactor(0);
+    recap.setDepth(180);
+    
+    // Background
+    const bg = this.scene.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.6);
+    recap.add(bg);
+    
+    // Panel
+    const panelWidth = 350;
+    const panelHeight = 280;
+    const panel = this.scene.add.graphics();
+    panel.fillStyle(0x1a1a2e, 0.95);
+    panel.fillRoundedRect(width / 2 - panelWidth / 2, height / 2 - panelHeight / 2, panelWidth, panelHeight, 12);
+    panel.lineStyle(2, 0x3498db, 1);
+    panel.strokeRoundedRect(width / 2 - panelWidth / 2, height / 2 - panelHeight / 2, panelWidth, panelHeight, 12);
+    recap.add(panel);
+    
+    // Title
+    const title = this.scene.add.text(width / 2, height / 2 - panelHeight / 2 + 25, '📊 MOMENT RECAP', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '18px',
+      color: '#3498db',
+      fontStyle: 'bold'
+    });
+    title.setOrigin(0.5);
+    recap.add(title);
+    
+    // Stats
+    const statsList = [
+      { label: 'Goals', value: `${stats.goalsScored} - ${stats.goalsConceded}` },
+      { label: 'Shots', value: `${stats.shotsOnTarget}/${stats.shotsTaken}` },
+      { label: 'Passes', value: `${stats.passesCompleted}/${stats.passesAttempted}` },
+      { label: 'Tackles', value: `${stats.tacklesWon} won` },
+      { label: 'Possession', value: `${Math.round((stats.possessionTime / stats.totalTime) * 100)}%` }
+    ];
+    
+    const startY = height / 2 - panelHeight / 2 + 65;
+    statsList.forEach((stat, i) => {
+      const y = startY + i * 32;
+      
+      const label = this.scene.add.text(width / 2 - 100, y, stat.label, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: '#bdc3c7'
+      });
+      recap.add(label);
+      
+      const value = this.scene.add.text(width / 2 + 100, y, stat.value, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: '#ffffff',
+        fontStyle: 'bold'
+      });
+      value.setOrigin(1, 0);
+      recap.add(value);
+    });
+    
+    // Continue button
+    const btnBg = this.scene.add.graphics();
+    btnBg.fillStyle(0x3498db, 1);
+    btnBg.fillRoundedRect(width / 2 - 70, height / 2 + panelHeight / 2 - 55, 140, 40, 8);
+    recap.add(btnBg);
+    
+    const btnText = this.scene.add.text(width / 2, height / 2 + panelHeight / 2 - 35, 'CONTINUE', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '14px',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    });
+    btnText.setOrigin(0.5);
+    recap.add(btnText);
+    
+    const hitArea = this.scene.add.rectangle(width / 2, height / 2 + panelHeight / 2 - 35, 140, 40, 0x000000, 0);
+    hitArea.setInteractive({ useHandCursor: true });
+    recap.add(hitArea);
+    
+    hitArea.on('pointerdown', () => {
+      recap.destroy();
+      onContinue();
+    });
+    
+    hitArea.on('pointerover', () => {
+      btnBg.clear();
+      btnBg.fillStyle(0x2980b9, 1);
+      btnBg.fillRoundedRect(width / 2 - 70, height / 2 + panelHeight / 2 - 55, 140, 40, 8);
+    });
+    
+    hitArea.on('pointerout', () => {
+      btnBg.clear();
+      btnBg.fillStyle(0x3498db, 1);
+      btnBg.fillRoundedRect(width / 2 - 70, height / 2 + panelHeight / 2 - 55, 140, 40, 8);
+    });
+    
+    // Animate in
+    recap.setAlpha(0);
+    this.scene.tweens.add({
+      targets: recap,
+      alpha: 1,
+      duration: 300
     });
   }
   
@@ -294,6 +828,15 @@ export class UISystem {
       case 'assist':
         objectiveText = `Score from an assist (${state.objectiveProgress}/${state.objectiveTarget})`;
         break;
+      case 'giveAndGo':
+        objectiveText = `Give-and-go goal (${state.objectiveProgress}/${state.objectiveTarget})`;
+        break;
+      case 'possession':
+        objectiveText = `Hold possession: ${Math.round(state.objectiveProgress)}s / ${state.objectiveTarget}s`;
+        break;
+      case 'pressWin':
+        objectiveText = `Force turnovers (${state.objectiveProgress}/${state.objectiveTarget})`;
+        break;
     }
     this.updateObjective(objectiveText);
   }
@@ -318,7 +861,7 @@ export class UISystem {
     // Tooltip on hover
     bg.setInteractive();
     bg.on('pointerover', () => {
-      // Show tooltip
+      // Show tooltip with name
     });
   }
   
@@ -362,6 +905,33 @@ export class UISystem {
           onComplete: () => notification.destroy()
         });
       }
+    });
+  }
+  
+  // Show "no possession" feedback
+  showNoPossessionFeedback(): void {
+    const text = this.scene.add.text(
+      this.scene.cameras.main.centerX,
+      this.scene.cameras.main.centerY + 100,
+      'No ball!',
+      {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '20px',
+        color: '#e74c3c',
+        stroke: '#000000',
+        strokeThickness: 3
+      }
+    );
+    text.setOrigin(0.5);
+    text.setScrollFactor(0);
+    text.setDepth(120);
+    
+    this.scene.tweens.add({
+      targets: text,
+      alpha: 0,
+      y: text.y - 30,
+      duration: 600,
+      onComplete: () => text.destroy()
     });
   }
   
@@ -423,5 +993,7 @@ export class UISystem {
   destroy(): void {
     this.container.destroy();
     this.cooldownIcons.clear();
+    this.radarDots.clear();
+    this.controlsOverlay?.destroy();
   }
 }

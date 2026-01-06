@@ -30,6 +30,8 @@ export interface GameStats {
   totalGemsEarned: number;
   cleanSheets: number;
   perfectMoments: number;
+  hasSeenTutorial: number;  // 0 = not seen, 1 = seen
+  aimAssistStrength: number;  // 0-100, default 50
   uniqueCharactersPlayed: string[];
   uniqueBossesDefeated: string[];
 }
@@ -62,6 +64,8 @@ const DEFAULT_SAVE: SaveData = {
     totalGemsEarned: 0,
     cleanSheets: 0,
     perfectMoments: 0,
+    hasSeenTutorial: 0,
+    aimAssistStrength: 50,
     uniqueCharactersPlayed: [],
     uniqueBossesDefeated: []
   },
@@ -202,6 +206,17 @@ export class SaveSystem {
   // Stats
   getStats(): GameStats {
     return { ...this.data.stats };
+  }
+  
+  getStat(stat: keyof GameStats): number | string[] {
+    return this.data.stats[stat];
+  }
+  
+  setStat(stat: keyof GameStats, value: number): void {
+    if (typeof this.data.stats[stat] === 'number') {
+      (this.data.stats[stat] as number) = value;
+      this.save();
+    }
   }
   
   incrementStat(stat: keyof GameStats, amount: number = 1): void {
