@@ -186,6 +186,9 @@ export class RunScene extends Phaser.Scene {
    * Create the AI-DEFENSE v3 HUD marker (Part A)
    * Always visible during gameplay to confirm new code is running
    */
+  // HUD markers for AI Defense and GK
+  private gkStatusMarker?: Phaser.GameObjects.Text;
+  
   private createAIDefenseMarker(): void {
     const marker = this.add.text(
       this.cameras.main.width - 10,
@@ -202,6 +205,43 @@ export class RunScene extends Phaser.Scene {
     marker.setOrigin(1, 0);  // Right-aligned
     marker.setScrollFactor(0);
     marker.setDepth(500);
+    
+    // GK Status marker (Part B - verification)
+    this.gkStatusMarker = this.add.text(
+      this.cameras.main.width - 10,
+      28,
+      'GK: LOADING...',
+      {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#ffff00',
+        backgroundColor: '#000000aa',
+        padding: { x: 6, y: 3 }
+      }
+    );
+    this.gkStatusMarker.setOrigin(1, 0);
+    this.gkStatusMarker.setScrollFactor(0);
+    this.gkStatusMarker.setDepth(500);
+  }
+  
+  /**
+   * Update GK status marker
+   */
+  private updateGKStatusMarker(): void {
+    if (!this.gkStatusMarker) return;
+    
+    if (this.enemyGoalkeeper && TUNING.GK_ENABLED) {
+      const gkInfo = this.enemyGoalkeeper.getDebugInfo();
+      const state = gkInfo.isLunging ? 'LUNGE' : 'HOLD';
+      this.gkStatusMarker.setText(`GK: ON (${state}) Saves:${gkInfo.saves}`);
+      this.gkStatusMarker.setColor('#00ff00');
+    } else if (!TUNING.GK_ENABLED) {
+      this.gkStatusMarker.setText('GK: DISABLED');
+      this.gkStatusMarker.setColor('#ff6600');
+    } else {
+      this.gkStatusMarker.setText('GK: OFF');
+      this.gkStatusMarker.setColor('#ff0000');
+    }
   }
   
   private createField(): void {
@@ -808,17 +848,29 @@ export class RunScene extends Phaser.Scene {
       this.dCircleDebugText.setDepth(500);
     }
     
-    const shotInfo = this.ball;
+    // Get touch debug info from ball
+    const touchInfo = this.ball.getTouchDebugInfo();
+    const touchRecent = this.ball.isLastTouchInDRecent();
+    
     const lines = [
       '=== D-CIRCLE DEBUG (F4) ===',
       `Player In Attacking D: ${playerInD ? 'YES ✓' : 'NO ✗'}`,
       `D Radius: ${dRadius}px`,
       '',
-      '--- LAST SHOT ---',
-      `Team: ${shotInfo.lastShotTeam}`,
-      `From Inside D: ${shotInfo.lastShotFromInsideD ? 'YES ✓' : 'NO ✗'}`,
-      `Recent: ${shotInfo.isLastShotRecent() ? 'YES' : 'expired'}`,
-      `Origin: (${Math.round(shotInfo.lastShotX)}, ${Math.round(shotInfo.lastShotY)})`
+      '--- LAST TOUCH IN D (GOAL VALIDATION) ---',
+      `Team: ${touchInfo.team}`,
+      `Kind: ${touchInfo.kind}`,
+      `Ms Ago: ${Math.round(touchInfo.msAgo)}`,
+      `Recent (<4s): ${touchRecent ? 'YES ✓' : 'NO ✗'}`,
+      `Position: (${Math.round(touchInfo.x)}, ${Math.round(touchInfo.y)})`,
+      '',
+      '--- LEGACY SHOT INFO ---',
+      `Shot Team: ${this.ball.lastShotTeam}`,
+      `Shot In D: ${this.ball.lastShotFromInsideD ? 'YES' : 'NO'}`,
+      '',
+      '--- GOAL RULES ---',
+      `Require D: ${TUNING.REQUIRE_SHOT_FROM_D ? 'YES' : 'NO'}`,
+      `Window: ${TUNING.SHOT_TO_GOAL_MAX_MS}ms`
     ];
     
     this.dCircleDebugText.setText(lines.join('\n'));
@@ -1245,6 +1297,9 @@ export class RunScene extends Phaser.Scene {
       const isInsideD = this.isPointInAttackingD('player', this.player.x, this.player.y);
       this.ball.recordShotOrigin(this.player.x, this.player.y, 'player', isInsideD);
       
+      // === REGISTER TOUCH IN D (Part A FIX) - CRITICAL FOR GOAL VALIDATION ===
+      this.ball.registerTouch('player', 'player', this.player.x, this.player.y, 'shot', isInsideD);
+      
       // Use the Ball's kick method with the calculated power
       const direction = { x: Math.cos(angle), y: Math.sin(angle) };
       this.ball.kick(direction, power, TUNING.SHOT_SPIN_BASE * (Math.random() - 0.5), 'shot');
@@ -1388,6 +1443,9 @@ export class RunScene extends Phaser.Scene {
         const isInsideD = this.isPointInAttackingD('player', teammate.x, teammate.y);
         this.ball.recordShotOrigin(teammate.x, teammate.y, 'player', isInsideD);
         
+        // === REGISTER TOUCH IN D (Part A FIX) ===
+        this.ball.registerTouch('player', `teammate_${i}`, teammate.x, teammate.y, 'shot', isInsideD);
+        
         const direction = { x: Math.cos(angle), y: Math.sin(angle) };
         this.ball.kick(direction, power, 0, 'shot');
         this.ball.lastShooter = teammate;
@@ -1460,6 +1518,9 @@ export class RunScene extends Phaser.Scene {
         const isInsideD = this.isPointInAttackingD('enemy', enemy.x, enemy.y);
         this.ball.recordShotOrigin(enemy.x, enemy.y, 'enemy', isInsideD);
         
+        // === REGISTER TOUCH IN D (Part A FIX) ===
+        this.ball.registerTouch('enemy', `enemy_${i}`, enemy.x, enemy.y, 'shot', isInsideD);
+        
         const direction = { x: Math.cos(angle), y: Math.sin(angle) };
         this.ball.kick(direction, power, 0, 'shot');
         this.ball.lastShooter = enemy;
@@ -1529,21 +1590,28 @@ export class RunScene extends Phaser.Scene {
         const prevTeam = this.ball.attachTo(this.player);
         this.player.receiveBall();
         
+        // === REGISTER TOUCH IN D (Part A FIX) ===
+        const isReceive = this.ball.intendedReceiver === this.player;
+        const isIntercept = this.ball.wasStolen(prevTeam, 'player');
+        const touchKind = isIntercept ? 'intercept' : (isReceive ? 'receive' : 'dribble');
+        const inAttackingD = this.isPointInAttackingD('player', this.player.x, this.player.y);
+        this.ball.registerTouch('player', 'player', this.player.x, this.player.y, touchKind, inAttackingD);
+        
         // Check if this was a steal (interception)
-        if (this.ball.wasStolen(prevTeam, 'player')) {
+        if (isIntercept) {
           console.log('[STEAL] Player intercepted ball from enemy');
           this.momentSystem.playerStole();
         }
         
         // Count as completed pass if there was an intended receiver
-        if (this.ball.intendedReceiver === this.player) {
+        if (isReceive) {
           this.momentStats.passesCompleted++;
         }
       }
     });
     
     // Ball pickup by teammates
-    this.teammates.forEach(teammate => {
+    this.teammates.forEach((teammate, idx) => {
       this.physics.add.overlap(teammate, this.ball, () => {
         // Block pickup during moment initialization
         if (this.isInitializingMoment) return;
@@ -1556,14 +1624,21 @@ export class RunScene extends Phaser.Scene {
           const prevTeam = this.ball.attachTo(teammate);
           teammate.receiveBall();
           
+          // === REGISTER TOUCH IN D (Part A FIX) ===
+          const isReceive = this.ball.intendedReceiver === teammate;
+          const isIntercept = this.ball.wasStolen(prevTeam, 'player');
+          const touchKind = isIntercept ? 'intercept' : (isReceive ? 'receive' : 'dribble');
+          const inAttackingD = this.isPointInAttackingD('player', teammate.x, teammate.y);
+          this.ball.registerTouch('player', `teammate_${idx}`, teammate.x, teammate.y, touchKind, inAttackingD);
+          
           // Check if this was a steal (interception by teammate)
-          if (this.ball.wasStolen(prevTeam, 'player')) {
+          if (isIntercept) {
             console.log('[STEAL] Teammate intercepted ball from enemy');
             this.momentSystem.playerStole();
           }
           
           // Count as completed pass if intended receiver
-          if (this.ball.intendedReceiver === teammate) {
+          if (isReceive) {
             this.momentStats.passesCompleted++;
           }
         }
@@ -1571,7 +1646,7 @@ export class RunScene extends Phaser.Scene {
     });
     
     // Ball pickup by enemies
-    this.enemies.forEach(enemy => {
+    this.enemies.forEach((enemy, idx) => {
       this.physics.add.overlap(enemy, this.ball, () => {
         // Block pickup during moment initialization
         if (this.isInitializingMoment) return;
@@ -1583,6 +1658,12 @@ export class RunScene extends Phaser.Scene {
           // Track previous possession (for potential future "enemy stole" events)
           this.ball.attachTo(enemy);
           enemy.receiveBall();
+          
+          // === REGISTER TOUCH IN D (Part A FIX) ===
+          const isReceive = this.ball.intendedReceiver === enemy;
+          const touchKind = isReceive ? 'receive' : 'dribble';
+          const inAttackingD = this.isPointInAttackingD('enemy', enemy.x, enemy.y);
+          this.ball.registerTouch('enemy', `enemy_${idx}`, enemy.x, enemy.y, touchKind, inAttackingD);
         }
       });
     });
@@ -1643,26 +1724,45 @@ export class RunScene extends Phaser.Scene {
     const speed = this.ball.getSpeed();
     if (speed < TUNING.GOAL_MIN_SPEED) return;
     
-    // === PART B: D-CIRCLE SCORING RULE ===
-    // Only apply to scoring-type moments
+    // === PART A FIX: ROBUST D-CIRCLE SCORING RULE ===
+    // Uses lastTouchInD tracking - ANY touch (shot/pass/dribble/receive) in attacking D counts
     const moment = this.momentSystem.getCurrentMoment();
     const scoringObjectives = ['score', 'multiGoal', 'reboundGoal', 'assist', 'giveAndGo', 'penaltyCorner', 'pc_score', 'pcBattle'];
     const isScoringMoment = !moment || scoringObjectives.includes(moment.objective);
     
+    // Determine which team is scoring based on goal side
+    // Right goal = player team scores, Left goal = enemy team scores
+    const scoringTeam = isRightGoal ? 'player' : 'enemy';
+    
+    // Get touch debug info
+    const touchInfo = this.ball.getTouchDebugInfo();
+    const msSinceTouch = touchInfo.msAgo;
+    const touchInDTeam = this.ball.lastTouchInDTeam;
+    const touchRecent = this.ball.isLastTouchInDRecent();
+    
+    // Debug log EVERY goal attempt
+    console.log('[GOAL_CHECK]', {
+      scoringTeam,
+      lastTouchInDTeam: touchInDTeam,
+      msSinceTouch: Math.round(msSinceTouch),
+      touchKind: touchInfo.kind,
+      touchRecent,
+      isScoringMoment,
+      requireD: TUNING.REQUIRE_SHOT_FROM_D
+    });
+    
     if (TUNING.REQUIRE_SHOT_FROM_D && isScoringMoment) {
-      // Determine which team is scoring
-      const scoringTeam = isRightGoal ? 'player' : 'enemy';
+      // VALIDATE: scoring team must have last touched ball inside their attacking D recently
+      const validTouch = touchInDTeam === scoringTeam && touchRecent;
       
-      // Check if shot was from inside D
-      const validShot = this.ball.lastShotTeam === scoringTeam && 
-                        this.ball.lastShotFromInsideD && 
-                        this.ball.isLastShotRecent();
-      
-      if (!validShot) {
-        // NO GOAL - shot from outside D
-        this.showNoGoalFeedback(isRightGoal);
+      if (!validTouch) {
+        // NO GOAL - no valid touch in D
+        console.log('[GOAL_CHECK] REJECTED - must touch inside D');
+        this.showNoGoalFeedback(isRightGoal, touchInfo.kind, msSinceTouch);
         return;
       }
+      
+      console.log('[GOAL_CHECK] ALLOWED - valid touch in D');
     }
     
     // GOAL!
@@ -1670,10 +1770,10 @@ export class RunScene extends Phaser.Scene {
   }
   
   /**
-   * Show "NO GOAL" feedback when shot was from outside the D
+   * Show "NO GOAL" feedback when ball entered goal without valid D touch
    */
-  private showNoGoalFeedback(isRightGoal: boolean): void {
-    console.log(`[NO_GOAL] Shot was from outside the D`);
+  private showNoGoalFeedback(isRightGoal: boolean, lastTouchKind: string = 'none', msSinceTouch: number = 0): void {
+    console.log(`[NO_GOAL] Must touch inside the D. Last touch: ${lastTouchKind}, ${Math.round(msSinceTouch)}ms ago`);
     
     // Play whistle sound
     this.audioSystem.playWhistle();
@@ -1682,7 +1782,7 @@ export class RunScene extends Phaser.Scene {
     const text = this.add.text(
       this.ball.x,
       this.ball.y - 30,
-      'NO GOAL\nShot outside the D',
+      'NO GOAL\nMust touch inside the D',
       {
         fontFamily: 'Arial Black, Arial, sans-serif',
         fontSize: '22px',
@@ -2716,6 +2816,9 @@ export class RunScene extends Phaser.Scene {
     
     // Update enemy goalkeeper (Part C)
     this.enemyGoalkeeper?.update(delta);
+    
+    // Update GK status marker (Part B)
+    this.updateGKStatusMarker();
     
     // Update D-circle debug if enabled (Part B)
     if (this.debugDCircle) {

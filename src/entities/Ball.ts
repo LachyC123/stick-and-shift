@@ -22,12 +22,21 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   // Possession tracking for steal detection
   public lastPossessingTeam: PossessionTeam = 'none';
   
-  // Shot origin tracking (for D-circle scoring rule)
+  // Shot origin tracking (for D-circle scoring rule) - LEGACY
   public lastShotTeam: PossessionTeam = 'none';
   public lastShotFromInsideD: boolean = false;
   public lastShotTime: number = 0;
   public lastShotX: number = 0;
   public lastShotY: number = 0;
+  
+  // === ROBUST D-CIRCLE TOUCH TRACKING (Part A - FIX) ===
+  // Tracks ANY touch in the attacking D (shot, pass, dribble, deflect, receive, tackle)
+  public lastTouchInDTeam: PossessionTeam = 'none';
+  public lastTouchInDTime: number = 0;
+  public lastTouchInDKind: string = 'none';  // shot/pass/dribble/deflect/receive/tackle/intercept
+  public lastTouchInDX: number = 0;
+  public lastTouchInDY: number = 0;
+  public lastToucherId: string = '';
   
   // Pass targeting for assist logic
   public intendedReceiver: any = null;
@@ -327,6 +336,74 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     this.lastShotY = 0;
   }
   
+  /**
+   * === ROBUST D-CIRCLE TOUCH REGISTRATION (Part A) ===
+   * Call this whenever ANY entity touches the ball (shot, pass, receive, dribble, tackle, deflect)
+   * The goal scoring gate uses lastTouchInD to validate goals
+   * 
+   * @param toucherTeam - 'player' or 'enemy'
+   * @param toucherId - unique identifier for the toucher
+   * @param x - position of toucher when touching
+   * @param y - position of toucher when touching
+   * @param kind - type of touch: 'shot'|'pass'|'dribble'|'receive'|'tackle'|'deflect'|'intercept'
+   * @param isInAttackingD - whether toucher is in their ATTACKING D
+   */
+  registerTouch(
+    toucherTeam: PossessionTeam,
+    toucherId: string,
+    x: number,
+    y: number,
+    kind: string,
+    isInAttackingD: boolean
+  ): void {
+    // Always update general touch info
+    const now = this.scene.time.now;
+    
+    // If this touch is in the attacking D, record it as potential goal-scoring touch
+    if (isInAttackingD) {
+      this.lastTouchInDTeam = toucherTeam;
+      this.lastTouchInDTime = now;
+      this.lastTouchInDKind = kind;
+      this.lastTouchInDX = x;
+      this.lastTouchInDY = y;
+      this.lastToucherId = toucherId;
+      
+      console.log(`[TOUCH_IN_D] Team: ${toucherTeam}, Kind: ${kind}, Pos: (${Math.round(x)}, ${Math.round(y)})`);
+    }
+  }
+  
+  /**
+   * Check if last touch in D was recent enough for goal validation
+   */
+  isLastTouchInDRecent(): boolean {
+    return this.scene.time.now - this.lastTouchInDTime < TUNING.SHOT_TO_GOAL_MAX_MS;
+  }
+  
+  /**
+   * Clear all touch tracking (e.g., on goal or reset)
+   */
+  clearTouchTracking(): void {
+    this.lastTouchInDTeam = 'none';
+    this.lastTouchInDTime = 0;
+    this.lastTouchInDKind = 'none';
+    this.lastTouchInDX = 0;
+    this.lastTouchInDY = 0;
+    this.lastToucherId = '';
+  }
+  
+  /**
+   * Get debug info for touch tracking
+   */
+  getTouchDebugInfo(): { team: PossessionTeam; kind: string; msAgo: number; x: number; y: number } {
+    return {
+      team: this.lastTouchInDTeam,
+      kind: this.lastTouchInDKind,
+      msAgo: this.scene.time.now - this.lastTouchInDTime,
+      x: this.lastTouchInDX,
+      y: this.lastTouchInDY
+    };
+  }
+  
   // Pass the ball (uses kick internally)
   pass(power: number, angle: number, passer: any, intendedReceiver?: any): void {
     this.owner = null;
@@ -493,6 +570,9 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     
     // Clear shot origin tracking
     this.clearShotOrigin();
+    
+    // Clear touch tracking (Part A fix)
+    this.clearTouchTracking();
     
     // Clear trail
     this.trailPoints = [];

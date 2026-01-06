@@ -560,6 +560,137 @@ export class UpgradeSystem extends Phaser.Events.EventEmitter {
           }
         };
       
+      // ========== NEW UPGRADES (PART E - CRITICAL FIX PACK) ==========
+      
+      // 1) slap_shot_boost - handled via modifiers (passive)
+      case 'slapShotBoost':
+        return () => {};
+      
+      // 2) quick_release - shooting reduces next shoot cooldown
+      case 'quickReleaseBuff':
+        return (ctx) => {
+          this.addTempBuff('quickRelease', 'shootCooldown', -25, 2000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // 3) curve_drive - shots curve more
+      case 'curveDriveShot':
+        return (ctx) => {
+          ctx.ball?.setSpin?.(0.15);
+          this.procUpgrade(upgradeId, upgrade.name, 0.9);
+        };
+      
+      // 4) one_touch_finish - receive in D gives shot buff
+      case 'oneTouchFinishBuff':
+        return (ctx) => {
+          // Check if this is a receive event in the D
+          if (ctx.playerInAttackingD) {
+            this.addTempBuff('oneTouchFinish', 'shotPower', 20, 1200, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 1);
+          }
+        };
+      
+      // 5) d_poacher - +10% speed in D with ball
+      case 'dPoacherSpeed':
+        return (ctx) => {
+          if (ctx.playerHasBall && ctx.playerInAttackingD) {
+            this.addTempBuff('dPoacherSpeed', 'speed', 10, 200, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 0.2);
+          }
+        };
+      
+      // 6) laser_passes - handled via modifiers (passive)
+      case 'laserPasses':
+        return () => {};
+      
+      // 7) give_go_master - extended give-and-go window
+      case 'giveGoMasterBuff':
+        return (ctx) => {
+          // Extend G&G window when passing
+          this.addTempBuff('giveGoWindow', 'giveGoWindow', 50, 3000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 0.6);
+        };
+      
+      // 8) magnetic_first_touch - control buff + magnet on receive
+      case 'magneticFirstTouch':
+        return (ctx) => {
+          this.addTempBuff('magneticFirstTouch', 'control', 30, 2000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // 9) interception_gloves - handled via modifiers (passive)
+      case 'interceptionGloves':
+        return () => {};
+      
+      // 10) crunch_tackle - handled via modifiers (passive)
+      case 'crunchTackle':
+        return () => {};
+      
+      // 11) stun_stick - extra stun on tackle
+      case 'stunStickExtra':
+        return (ctx) => {
+          ctx.target?.applyStun?.(120);
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // 12) second_wind_moment - restore stamina at moment start
+      case 'secondWindMoment':
+        return (ctx) => {
+          ctx.player?.restoreStamina?.(100);
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // 13) efficient_dash - handled via modifiers (passive)
+      case 'efficientDash':
+        return () => {};
+      
+      // 14) adrenaline_advantage - super advantage on steal
+      case 'adrenalineAdvantageBuff':
+        return (ctx) => {
+          this.addTempBuff('adrenalineSpeed', 'speed', 20, 3000, 'upgrade');
+          this.addTempBuff('adrenalinePass', 'passPower', 20, 3000, 'upgrade');
+          this.addTempBuff('adrenalineShot', 'shotPower', 20, 3000, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // 15) pc_drag_flick - PC shots +35% power
+      case 'pcDragFlickPower':
+        return (ctx) => {
+          // Check if in PC mode (would need additional context)
+          this.addTempBuff('pcDragFlick', 'shotPower', 35, 500, 'upgrade');
+          this.procUpgrade(upgradeId, upgrade.name, 1);
+        };
+      
+      // 16) pc_injector - handled via modifiers (passive)
+      case 'pcInjectorBuff':
+        return () => {};
+      
+      // 17) keeper_nerves - shot speed burst in D
+      case 'keeperNervesBurst':
+        return (ctx) => {
+          if (ctx.playerInAttackingD) {
+            this.addTempBuff('keeperNerves', 'shotSpeed', 8, 300, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 1);
+          }
+        };
+      
+      // 18) rebound_hunter_pro - speed on rebound
+      case 'reboundHunterProBurst':
+        return (ctx) => {
+          if (ctx.ball?.isRebound) {
+            this.addTempBuff('reboundHunterPro', 'speed', 50, 1500, 'upgrade');
+            this.procUpgrade(upgradeId, upgrade.name, 1);
+          }
+        };
+      
+      // 19) iron_body - handled via modifiers (passive)
+      case 'ironBody':
+        return () => {};
+      
+      // 20) fragile_genius - handled via modifiers (passive)
+      case 'fragileGenius':
+        return () => {};
+      
       // === DEFAULT ===
       default:
         return () => {};

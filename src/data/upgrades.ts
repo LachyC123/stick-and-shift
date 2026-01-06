@@ -1828,6 +1828,279 @@ export const UPGRADES: Upgrade[] = [
     modifiers: [],
     effectId: 'firstTouchOnTarget',
     icon: '💯'
+  },
+
+  // ========== 20 NEW UPGRADES (PART E - CRITICAL FIX PACK) ==========
+  
+  // 1) slap_shot_boost - +18% shot speed
+  {
+    id: 'slap_shot_boost',
+    name: 'Slap Shot Boost',
+    description: '+18% shot speed - feel the power!',
+    rarity: 'uncommon',
+    synergies: ['dragFlick', 'precision'],
+    hooks: ['passive'],
+    modifiers: [{ stat: 'shotPower', value: 18, isPercent: true }],
+    effectId: 'slapShotBoost',
+    icon: '🏒',
+    maxStacks: 2
+  },
+  
+  // 2) quick_release - shoot cooldown reduction after shooting
+  {
+    id: 'quick_release',
+    name: 'Quick Release',
+    description: 'Shooting reduces next shoot cooldown by 25% for 2s',
+    rarity: 'rare',
+    synergies: ['dragFlick', 'speedster'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'quickReleaseBuff',
+    icon: '⚡'
+  },
+  
+  // 3) curve_drive - shots curve/spin more
+  {
+    id: 'curve_drive',
+    name: 'Curve Drive',
+    description: 'Shots curve toward goal + visible spin effect',
+    rarity: 'uncommon',
+    synergies: ['trickster', 'precision'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'curveDriveShot',
+    icon: '🌀'
+  },
+  
+  // 4) one_touch_finish - receive in D = next shot +20% speed
+  {
+    id: 'one_touch_finish',
+    name: 'One Touch Finish',
+    description: 'Receive ball inside D → next shot within 1.2s gets +20% speed',
+    rarity: 'rare',
+    synergies: ['poacher', 'precision'],
+    hooks: ['onReceive', 'onShot'],
+    modifiers: [],
+    effectId: 'oneTouchFinishBuff',
+    icon: '☝️'
+  },
+  
+  // 5) d_poacher - +10% speed when in D with ball
+  {
+    id: 'd_poacher',
+    name: 'D Poacher',
+    description: '+10% speed when in attacking D with ball',
+    rarity: 'uncommon',
+    synergies: ['poacher', 'speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'dPoacherSpeed',
+    icon: '🎯'
+  },
+  
+  // 6) laser_passes - +20% pass speed
+  {
+    id: 'laser_passes',
+    name: 'Laser Passes',
+    description: '+20% pass speed - crisp and accurate',
+    rarity: 'uncommon',
+    synergies: ['trianglePassing', 'speedster'],
+    hooks: ['passive'],
+    modifiers: [{ stat: 'passPower', value: 20, isPercent: true }],
+    effectId: 'laserPasses',
+    icon: '💫',
+    maxStacks: 2
+  },
+  
+  // 7) give_go_master - improved give-and-go
+  {
+    id: 'give_go_master',
+    name: 'Give & Go Master',
+    description: 'Give-and-go window extended + stronger speed buff',
+    rarity: 'rare',
+    synergies: ['trianglePassing', 'speedster'],
+    hooks: ['onPass', 'onReceive'],
+    modifiers: [],
+    effectId: 'giveGoMasterBuff',
+    icon: '🔄'
+  },
+  
+  // 8) magnetic_first_touch - better control on receive
+  {
+    id: 'magnetic_first_touch',
+    name: 'Magnetic First Touch',
+    description: '+30% control for 2s after receiving + ball magnetism',
+    rarity: 'uncommon',
+    synergies: ['possession', 'trickster'],
+    hooks: ['onReceive'],
+    modifiers: [],
+    effectId: 'magneticFirstTouch',
+    icon: '🧲'
+  },
+  
+  // 9) interception_gloves - larger intercept radius
+  {
+    id: 'interception_gloves',
+    name: 'Interception Gloves',
+    description: '+15% intercept/pickup radius',
+    rarity: 'uncommon',
+    synergies: ['guardian', 'sweeper'],
+    hooks: ['passive'],
+    modifiers: [{ stat: 'interceptRadius', value: 15, isPercent: true }],
+    effectId: 'interceptionGloves',
+    icon: '🧤'
+  },
+  
+  // 10) crunch_tackle - +25% tackle knockback
+  {
+    id: 'crunch_tackle',
+    name: 'Crunch Tackle',
+    description: '+25% tackle knockback - send them flying!',
+    rarity: 'uncommon',
+    synergies: ['press', 'berserker'],
+    hooks: ['passive'],
+    modifiers: [{ stat: 'tackleKnockback', value: 25, isPercent: true }],
+    effectId: 'crunchTackle',
+    icon: '💪',
+    maxStacks: 2
+  },
+  
+  // 11) stun_stick - +120ms stun on tackles
+  {
+    id: 'stun_stick',
+    name: 'Stun Stick',
+    description: 'Successful tackles add +120ms stun duration',
+    rarity: 'rare',
+    synergies: ['press', 'tank'],
+    hooks: ['onSteal'],
+    modifiers: [],
+    effectId: 'stunStickExtra',
+    icon: '⚡'
+  },
+  
+  // 12) second_wind - restore stamina at moment start
+  {
+    id: 'second_wind_moment',
+    name: 'Second Wind',
+    description: 'Restore full stamina at moment start (once per moment)',
+    rarity: 'uncommon',
+    synergies: ['speedster'],
+    hooks: ['onMomentStart'],
+    modifiers: [],
+    effectId: 'secondWindMoment',
+    icon: '🌬️'
+  },
+  
+  // 13) efficient_dash - dash stamina -30%
+  {
+    id: 'efficient_dash',
+    name: 'Efficient Dash',
+    description: 'Dash stamina cost reduced by 30%',
+    rarity: 'uncommon',
+    synergies: ['speedster', 'trickster'],
+    hooks: ['passive'],
+    modifiers: [{ stat: 'dashCost', value: -30, isPercent: true }],
+    effectId: 'efficientDash',
+    icon: '💨',
+    maxStacks: 2
+  },
+  
+  // 14) adrenaline_advantage - stronger advantage buff on steal
+  {
+    id: 'adrenaline_advantage',
+    name: 'Adrenaline Advantage',
+    description: 'Steal triggers 3s SUPER advantage (+20% speed/pass/shot)',
+    rarity: 'rare',
+    synergies: ['counterPress', 'speedster'],
+    hooks: ['onSteal'],
+    modifiers: [],
+    effectId: 'adrenalineAdvantageBuff',
+    icon: '🔥'
+  },
+  
+  // 15) pc_drag_flick - PC shots +35% power
+  {
+    id: 'pc_drag_flick',
+    name: 'PC Drag Flick',
+    description: 'Penalty corner shots have +35% power',
+    rarity: 'rare',
+    synergies: ['dragFlick'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'pcDragFlickPower',
+    icon: '🏑'
+  },
+  
+  // 16) pc_injector - PC pass speed +25%, stopper control +15%
+  {
+    id: 'pc_injector',
+    name: 'PC Injector',
+    description: 'PC injection pass +25% speed, stopper control +15%',
+    rarity: 'uncommon',
+    synergies: ['dragFlick', 'trianglePassing'],
+    hooks: ['onPass', 'onReceive'],
+    modifiers: [
+      { stat: 'pcPassSpeed', value: 25, isPercent: true },
+      { stat: 'pcControl', value: 15, isPercent: true }
+    ],
+    effectId: 'pcInjectorBuff',
+    icon: '💉'
+  },
+  
+  // 17) keeper_nerves - shots in D get small speed burst vs GK
+  {
+    id: 'keeper_nerves',
+    name: 'Keeper Nerves',
+    description: 'Shots from inside D get +8% speed burst (beats GK reaction)',
+    rarity: 'rare',
+    synergies: ['poacher', 'precision'],
+    hooks: ['onShot'],
+    modifiers: [],
+    effectId: 'keeperNervesBurst',
+    icon: '😰'
+  },
+  
+  // 18) rebound_hunter_pro - burst speed on GK save/rebound
+  {
+    id: 'rebound_hunter_pro',
+    name: 'Rebound Hunter Pro',
+    description: 'On ball deflection/rebound: +50% speed for 1.5s',
+    rarity: 'rare',
+    synergies: ['rebound', 'speedster'],
+    hooks: ['onTick'],
+    modifiers: [],
+    effectId: 'reboundHunterProBurst',
+    icon: '🦅'
+  },
+  
+  // 19) iron_body - tackle damage -25%
+  {
+    id: 'iron_body',
+    name: 'Iron Body',
+    description: 'Take 25% less damage from tackles',
+    rarity: 'uncommon',
+    synergies: ['tank'],
+    hooks: ['passive'],
+    modifiers: [{ stat: 'tackleDamageReduction', value: 25, isPercent: true }],
+    effectId: 'ironBody',
+    icon: '🛡️',
+    maxStacks: 2
+  },
+  
+  // 20) fragile_genius - +25% shot speed, +20% tackle damage taken
+  {
+    id: 'fragile_genius',
+    name: 'Fragile Genius',
+    description: '+25% shot speed BUT +20% tackle damage taken',
+    rarity: 'rare',
+    synergies: ['dragFlick', 'berserker'],
+    hooks: ['passive'],
+    modifiers: [
+      { stat: 'shotPower', value: 25, isPercent: true },
+      { stat: 'tackleDamageTaken', value: 20, isPercent: true }
+    ],
+    effectId: 'fragileGenius',
+    icon: '🧠'
   }
 ];
 
