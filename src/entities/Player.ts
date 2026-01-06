@@ -1,6 +1,6 @@
 // Player entity for Stick & Shift
 // Main player-controlled field hockey player
-// Improved: unified tryShoot(), visual shot tell, tuning constants, pass assist
+// Improved: charged shots, better passing, knockback on tackle
 
 import Phaser from 'phaser';
 import { Character, CharacterStats } from '../data/characters';
@@ -21,6 +21,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   public isDodging: boolean = false;
   public justReceivedBall: boolean = false;
   public recentlyLostBall: boolean = false;
+  public isCharging: boolean = false;
+  public isHitstop: boolean = false;
   
   // Stamina
   public stamina: number = 100;
@@ -31,6 +33,10 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private passCooldown: number = 0;
   private tackleCooldown: number = 0;
   private dodgeCooldown: number = 0;
+  
+  // Charge shot state
+  private chargeStartTime: number = 0;
+  private chargeGraphics?: Phaser.GameObjects.Graphics;
   
   // Movement
   private targetVelocityX: number = 0;
@@ -47,10 +53,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   
   // Callbacks
   public onShoot?: (power: number, angle: number) => void;
-  public onPass?: (angle: number, passSpeed: number) => void;
+  public onPass?: (angle: number, passSpeed: number, targetPos?: { x: number; y: number }) => void;
   public onTackle?: () => void;
   public onDodge?: () => void;
   public onShootFailed?: () => void;
+  public onPassFailed?: () => void;
   
   constructor(scene: Phaser.Scene, x: number, y: number, character: Character) {
     super(scene, x, y, `player_0`);
@@ -68,21 +75,22 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setDrag(100);
     this.setDepth(10);
     
-    // Apply character color by choosing appropriate texture
+    // Apply character color
     const colorIndex = this.getColorIndex(character.color);
     this.setTexture(`player_${colorIndex}`);
     
-    // Create stick graphics for swing animation
+    // Graphics
     this.stickGraphics = scene.add.graphics();
     this.stickGraphics.setDepth(11);
     
-    // Shot line graphics
     this.shotLineGraphics = scene.add.graphics();
     this.shotLineGraphics.setDepth(9);
     
-    // Pass line graphics
     this.passLineGraphics = scene.add.graphics();
     this.passLineGraphics.setDepth(9);
+    
+    this.chargeGraphics = scene.add.graphics();
+    this.chargeGraphics.setDepth(12);
   }
   
   private getColorIndex(color: number): number {
@@ -100,7 +108,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.upgradeSystem = system;
   }
   
-  // Get modified stat value
   private getModifiedStat(statName: keyof CharacterStats): number {
     const baseStat = this.stats[statName];
     if (this.upgradeSystem) {
@@ -109,30 +116,29 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return baseStat;
   }
   
-  // Update each frame
   update(delta: number, input: InputState): void {
-    // Update cooldowns
     this.updateCooldowns(delta);
     
-    // Handle stun
-    if (this.isStunned) {
-      this.setVelocity(this.body!.velocity.x * 0.9, this.body!.velocity.y * 0.9);
+    // Handle hitstop (freeze movement briefly)
+    if (this.isHitstop) {
       return;
     }
     
-    // Handle dodging
+    // Handle stun
+    if (this.isStunned) {
+      this.setVelocity(this.body!.velocity.x * 0.92, this.body!.velocity.y * 0.92);
+      this.cancelCharge();
+      return;
+    }
+    
     if (this.isDodging) {
       return;
     }
     
-    // Process input
     this.processMovement(input, delta);
     this.processActions(input);
-    
-    // Update visuals
     this.updateVisuals(input);
-    
-    // Regenerate stamina
+    this.updateChargeUI();
     this.regenerateStamina(delta);
   }
   
@@ -161,10 +167,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
     
     this.setVelocity(newVelX, newVelY);
-    
     this.isMoving = input.isMoving;
     
-    // Update facing angle based on movement or aim
     if (input.isMoving) {
       this.facingAngle = Math.atan2(input.moveY, input.moveX);
     } else if (input.hasMouseMoved) {
@@ -173,89 +177,167 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
   
   private processActions(input: InputState): void {
-    // Shoot - triggers on keydown OR mouse click
-    if (input.shoot) {
-      this.tryShoot(input.aimAngle);
+    // === CHARGED SHOT ===
+    // Start charging on press
+    if (input.shoot && this.hasBall && this.shootCooldown <= 0) {
+      this.startCharge();
     }
     
-    // Pass
-    if (input.pass && this.hasBall && this.passCooldown <= 0) {
-      this.performPass(input.aimAngle);
+    // Release shot on key/mouse up
+    if (this.isCharging) {
+      if (input.shootReleased || (!input.shootHeld && !input.mouseDown)) {
+        this.releaseChargedShot(input.aimAngle);
+      } else if (!this.hasBall) {
+        // Lost ball while charging - cancel
+        this.cancelCharge();
+      }
     }
     
-    // Tackle
+    // Quick tap shot (instant release)
+    if (input.shoot && !this.isCharging && this.hasBall && this.shootCooldown <= 0) {
+      // Already handled above - starts charge
+    }
+    
+    // === PASS ===
+    if (input.pass && this.passCooldown <= 0) {
+      this.tryPass(input.aimAngle);
+    }
+    
+    // === TACKLE ===
     if (input.tackle && !this.hasBall && this.tackleCooldown <= 0) {
       this.tackle();
     }
     
-    // Dodge
+    // === DODGE ===
     if (input.dodge && this.dodgeCooldown <= 0 && this.stamina >= 20) {
       this.dodge(input.moveX || Math.cos(input.aimAngle), input.moveY || Math.sin(input.aimAngle));
     }
   }
   
-  /**
-   * Unified shoot method - call this from anywhere
-   * Returns true if shot was taken, false if blocked
-   */
-  tryShoot(aimAngle: number, chargePercent: number = 0): boolean {
-    if (this.shootCooldown > 0) {
-      return false;
+  // === CHARGE SHOT SYSTEM ===
+  
+  private startCharge(): void {
+    if (this.isCharging) return;
+    this.isCharging = true;
+    this.chargeStartTime = this.scene.time.now;
+  }
+  
+  private getChargePercent(): number {
+    if (!this.isCharging) return 0;
+    const elapsed = this.scene.time.now - this.chargeStartTime;
+    const t = Phaser.Math.Clamp(
+      (elapsed - TUNING.CHARGE_MIN_MS) / (TUNING.CHARGE_MAX_MS - TUNING.CHARGE_MIN_MS),
+      0, 1
+    );
+    return t;
+  }
+  
+  private getChargePowerMult(): number {
+    const t = this.getChargePercent();
+    return Phaser.Math.Linear(TUNING.CHARGE_POWER_MULT_MIN, TUNING.CHARGE_POWER_MULT_MAX, t);
+  }
+  
+  private releaseChargedShot(aimAngle: number): void {
+    if (!this.hasBall) {
+      this.cancelCharge();
+      return;
     }
+    
+    const powerMult = this.getChargePowerMult();
+    this.cancelCharge();
+    
+    // Calculate shot speed
+    const shotPower = this.getModifiedStat('shotPower');
+    const baseSpeed = TUNING.SHOT_SPEED_BASE + shotPower * TUNING.SHOT_SPEED_SCALE;
+    const finalSpeed = Math.min(baseSpeed * powerMult, TUNING.SHOT_SPEED_MAX);
+    
+    this.shoot(finalSpeed, aimAngle, powerMult > 1.1);
+  }
+  
+  cancelCharge(): void {
+    this.isCharging = false;
+    this.chargeStartTime = 0;
+    this.chargeGraphics?.clear();
+  }
+  
+  private updateChargeUI(): void {
+    if (!this.chargeGraphics) return;
+    this.chargeGraphics.clear();
+    
+    if (!this.isCharging) return;
+    
+    const pct = this.getChargePercent();
+    if (pct <= 0) return;
+    
+    // Draw charge bar above player
+    const barWidth = 36;
+    const barHeight = 6;
+    const x = this.x - barWidth / 2;
+    const y = this.y - 38;
+    
+    // Background
+    this.chargeGraphics.fillStyle(0x333333, 0.8);
+    this.chargeGraphics.fillRect(x, y, barWidth, barHeight);
+    
+    // Fill
+    const fillColor = pct >= 0.9 ? 0xf1c40f : 0x3498db;
+    this.chargeGraphics.fillStyle(fillColor, 1);
+    this.chargeGraphics.fillRect(x + 1, y + 1, (barWidth - 2) * pct, barHeight - 2);
+    
+    // Border
+    this.chargeGraphics.lineStyle(1, 0xffffff, 0.8);
+    this.chargeGraphics.strokeRect(x, y, barWidth, barHeight);
+  }
+  
+  // === SHOOTING ===
+  
+  tryShoot(aimAngle: number, chargePercent: number = 0): boolean {
+    if (this.shootCooldown > 0) return false;
     
     if (!this.hasBall) {
-      if (this.onShootFailed) {
-        this.onShootFailed();
-      }
+      this.onShootFailed?.();
       return false;
     }
     
-    // Calculate shot speed using tuning constants
     const shotPower = this.getModifiedStat('shotPower');
     const speed = Math.min(
       TUNING.SHOT_SPEED_BASE + shotPower * TUNING.SHOT_SPEED_SCALE,
       TUNING.SHOT_SPEED_MAX
     );
     
-    // Apply charge bonus
-    const finalSpeed = speed * (0.85 + chargePercent * 0.3);
+    const finalSpeed = speed * (TUNING.CHARGE_POWER_MULT_MIN + chargePercent * (TUNING.CHARGE_POWER_MULT_MAX - TUNING.CHARGE_POWER_MULT_MIN));
     
-    this.shoot(finalSpeed, aimAngle);
+    this.shoot(Math.min(finalSpeed, TUNING.SHOT_SPEED_MAX), aimAngle, chargePercent > 0.5);
     return true;
   }
   
-  private shoot(power: number, angle: number): void {
+  private shoot(power: number, angle: number, isCharged: boolean = false): void {
     this.isShooting = true;
     this.hasBall = false;
     this.shootCooldown = TUNING.COOLDOWN_SHOOT;
     
-    // Trigger upgrade effects
     this.upgradeSystem?.trigger('onShot', {
       player: this,
       position: { x: this.x, y: this.y },
       scene: this.scene
     });
     
-    if (this.onShoot) {
-      this.onShoot(power, angle);
-    }
+    this.onShoot?.(power, angle);
     
-    // === Visual shot tell ===
+    // Visual feedback
     this.playStickSwing(angle);
     this.playMuzzleFlash(angle, true);
     
-    // Camera punch for shot
-    this.scene.cameras.main.shake(
-      TUNING.CAMERA_SHAKE_SHOT_DURATION,
-      TUNING.CAMERA_SHAKE_SHOT
-    );
+    // Stronger shake for charged shots
+    const shakeIntensity = isCharged ? TUNING.CAMERA_SHAKE_SHOT * 1.5 : TUNING.CAMERA_SHAKE_SHOT;
+    this.scene.cameras.main.shake(TUNING.CAMERA_SHAKE_SHOT_DURATION, shakeIntensity);
     
     // Body animation
     this.scene.tweens.add({
       targets: this,
-      scaleX: 1.18,
-      scaleY: 0.82,
-      duration: 70,
+      scaleX: isCharged ? 1.22 : 1.15,
+      scaleY: isCharged ? 0.78 : 0.85,
+      duration: 60,
       yoyo: true,
       ease: 'Power2',
       onComplete: () => {
@@ -265,43 +347,122 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     });
   }
   
-  /**
-   * Perform a pass with proper speed and assist
-   */
+  // === PASSING ===
+  
+  tryPass(aimAngle: number): boolean {
+    if (this.passCooldown > 0) return false;
+    
+    if (!this.hasBall) {
+      this.onPassFailed?.();
+      return false;
+    }
+    
+    this.performPass(aimAngle);
+    return true;
+  }
+  
   private performPass(angle: number): void {
     this.hasBall = false;
     this.passCooldown = TUNING.COOLDOWN_PASS;
     
-    // Calculate pass speed using tuning constants
     const passPower = this.getModifiedStat('passPower');
     const speed = Math.min(
       TUNING.PASS_SPEED_BASE + passPower * TUNING.PASS_SPEED_SCALE,
       TUNING.PASS_SPEED_MAX
     );
     
-    // Trigger upgrade effects
     this.upgradeSystem?.trigger('onPass', {
       player: this,
       position: { x: this.x, y: this.y },
       scene: this.scene
     });
     
-    if (this.onPass) {
-      this.onPass(angle, speed);
-    }
+    this.onPass?.(angle, speed);
     
-    // Visual pass tell
+    // Visual
     this.playPassLine(angle);
     
-    // Subtle animation
+    // Small camera nudge
+    this.scene.cameras.main.shake(TUNING.CAMERA_SHAKE_PASS_DURATION, TUNING.CAMERA_SHAKE_PASS);
+    
     this.scene.tweens.add({
       targets: this,
-      scaleX: 1.08,
-      scaleY: 0.92,
-      duration: 50,
+      scaleX: 1.1,
+      scaleY: 0.9,
+      duration: 45,
       yoyo: true
     });
   }
+  
+  // === TACKLE ===
+  
+  private tackle(): void {
+    this.tackleCooldown = TUNING.COOLDOWN_TACKLE;
+    this.stamina -= 15;
+    
+    this.upgradeSystem?.trigger('onTackle', {
+      player: this,
+      position: { x: this.x, y: this.y },
+      scene: this.scene
+    });
+    
+    this.onTackle?.();
+    
+    // Lunge forward with speed
+    const lungeDistance = TUNING.TACKLE_DISTANCE_BASE + this.getModifiedStat('tackle') * TUNING.TACKLE_DISTANCE_SCALE;
+    const lungeX = Math.cos(this.facingAngle) * lungeDistance;
+    const lungeY = Math.sin(this.facingAngle) * lungeDistance;
+    
+    this.scene.tweens.add({
+      targets: this,
+      x: this.x + lungeX,
+      y: this.y + lungeY,
+      duration: 120,
+      ease: 'Power2'
+    });
+  }
+  
+  // === DODGE ===
+  
+  private dodge(dirX: number, dirY: number): void {
+    this.isDodging = true;
+    this.dodgeCooldown = TUNING.COOLDOWN_DODGE;
+    this.stamina -= 20;
+    
+    const len = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
+    dirX /= len;
+    dirY /= len;
+    
+    const dodgeDistance = TUNING.DODGE_DISTANCE_BASE + this.getModifiedStat('dodge') * TUNING.DODGE_DISTANCE_SCALE;
+    
+    this.upgradeSystem?.trigger('onDodge', {
+      player: this,
+      position: { x: this.x, y: this.y },
+      scene: this.scene
+    });
+    
+    this.onDodge?.();
+    
+    this.scene.tweens.add({
+      targets: this,
+      x: this.x + dirX * dodgeDistance,
+      y: this.y + dirY * dodgeDistance,
+      duration: TUNING.DODGE_DURATION,
+      ease: 'Power2',
+      onComplete: () => {
+        this.isDodging = false;
+      }
+    });
+    
+    this.scene.tweens.add({
+      targets: this,
+      alpha: 0.5,
+      duration: 80,
+      yoyo: true
+    });
+  }
+  
+  // === VISUAL EFFECTS ===
   
   private playStickSwing(angle: number): void {
     if (!this.stickGraphics) return;
@@ -311,7 +472,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const stickLength = 38;
     
     let currentAngle = startAngle;
-    const duration = 90;
+    const duration = 80;
     const startTime = this.scene.time.now;
     
     const animateStick = () => {
@@ -330,7 +491,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       );
       this.stickGraphics!.strokePath();
       
-      // Stick head
       this.stickGraphics!.fillStyle(0x333333, 1);
       this.stickGraphics!.fillCircle(
         this.x + Math.cos(currentAngle) * stickLength,
@@ -354,7 +514,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const graphics = this.shotLineGraphics;
     if (!graphics) return;
     
-    const lineLength = isShot ? 70 : 50;
+    const lineLength = isShot ? 75 : 50;
     const lineWidth = isShot ? 8 : 5;
     const color = isShot ? 0xf1c40f : 0x3498db;
     
@@ -370,16 +530,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     graphics.lineTo(endX, endY);
     graphics.strokePath();
     
-    // Impact circle at end
     graphics.fillStyle(0xffffff, 0.9);
     graphics.fillCircle(endX, endY, isShot ? 10 : 6);
     
-    // Fade out
     const fadeTarget = { alpha: 1 };
     this.scene.tweens.add({
       targets: fadeTarget,
       alpha: 0,
-      duration: 80,
+      duration: 70,
       onUpdate: () => {
         graphics.setAlpha(fadeTarget.alpha);
       },
@@ -394,29 +552,27 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const graphics = this.passLineGraphics;
     if (!graphics) return;
     
-    const lineLength = 55;
+    const lineLength = 60;
     const startX = this.x + Math.cos(angle) * 25;
     const startY = this.y + Math.sin(angle) * 25;
     const endX = this.x + Math.cos(angle) * lineLength;
     const endY = this.y + Math.sin(angle) * lineLength;
     
     graphics.clear();
-    graphics.lineStyle(4, 0x2ecc71, 0.8);
+    graphics.lineStyle(5, 0x2ecc71, 0.9);
     graphics.beginPath();
     graphics.moveTo(startX, startY);
     graphics.lineTo(endX, endY);
     graphics.strokePath();
     
-    // Small circle at end
-    graphics.fillStyle(0x2ecc71, 0.8);
-    graphics.fillCircle(endX, endY, 5);
+    graphics.fillStyle(0x2ecc71, 0.9);
+    graphics.fillCircle(endX, endY, 6);
     
-    // Fade out
     const fadeTarget = { alpha: 1 };
     this.scene.tweens.add({
       targets: fadeTarget,
       alpha: 0,
-      duration: 120,
+      duration: 100,
       onUpdate: () => {
         graphics.setAlpha(fadeTarget.alpha);
       },
@@ -427,91 +583,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     });
   }
   
-  private tackle(): void {
-    this.tackleCooldown = TUNING.COOLDOWN_TACKLE;
-    this.stamina -= 15;
-    
-    // Trigger upgrade effects
-    this.upgradeSystem?.trigger('onTackle', {
-      player: this,
-      position: { x: this.x, y: this.y },
-      scene: this.scene
-    });
-    
-    if (this.onTackle) {
-      this.onTackle();
-    }
-    
-    // Lunge forward
-    const lungeDistance = TUNING.TACKLE_DISTANCE_BASE + this.getModifiedStat('tackle') * TUNING.TACKLE_DISTANCE_SCALE;
-    const lungeX = Math.cos(this.facingAngle) * lungeDistance;
-    const lungeY = Math.sin(this.facingAngle) * lungeDistance;
-    
-    this.scene.tweens.add({
-      targets: this,
-      x: this.x + lungeX,
-      y: this.y + lungeY,
-      duration: 140,
-      ease: 'Power2'
-    });
-    
-    // Camera shake on tackle
-    this.scene.cameras.main.shake(
-      TUNING.CAMERA_SHAKE_TACKLE_DURATION,
-      TUNING.CAMERA_SHAKE_TACKLE
-    );
-  }
-  
-  private dodge(dirX: number, dirY: number): void {
-    this.isDodging = true;
-    this.dodgeCooldown = TUNING.COOLDOWN_DODGE;
-    this.stamina -= 20;
-    
-    // Normalize direction
-    const len = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-    dirX /= len;
-    dirY /= len;
-    
-    const dodgeDistance = TUNING.DODGE_DISTANCE_BASE + this.getModifiedStat('dodge') * TUNING.DODGE_DISTANCE_SCALE;
-    
-    // Trigger upgrade effects
-    this.upgradeSystem?.trigger('onDodge', {
-      player: this,
-      position: { x: this.x, y: this.y },
-      scene: this.scene
-    });
-    
-    if (this.onDodge) {
-      this.onDodge();
-    }
-    
-    // Dodge tween
-    this.scene.tweens.add({
-      targets: this,
-      x: this.x + dirX * dodgeDistance,
-      y: this.y + dirY * dodgeDistance,
-      duration: TUNING.DODGE_DURATION,
-      ease: 'Power2',
-      onComplete: () => {
-        this.isDodging = false;
-      }
-    });
-    
-    // Trail effect
-    this.scene.tweens.add({
-      targets: this,
-      alpha: 0.5,
-      duration: 80,
-      yoyo: true
-    });
-  }
+  // === UTILITIES ===
   
   private updateCooldowns(delta: number): void {
-    const dt = delta;
-    this.shootCooldown = Math.max(0, this.shootCooldown - dt);
-    this.passCooldown = Math.max(0, this.passCooldown - dt);
-    this.tackleCooldown = Math.max(0, this.tackleCooldown - dt);
-    this.dodgeCooldown = Math.max(0, this.dodgeCooldown - dt);
+    this.shootCooldown = Math.max(0, this.shootCooldown - delta);
+    this.passCooldown = Math.max(0, this.passCooldown - delta);
+    this.tackleCooldown = Math.max(0, this.tackleCooldown - delta);
+    this.dodgeCooldown = Math.max(0, this.dodgeCooldown - delta);
   }
   
   private regenerateStamina(delta: number): void {
@@ -531,7 +609,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
   
-  // External methods
+  // === EXTERNAL METHODS ===
+  
   receiveBall(): void {
     this.hasBall = true;
     this.justReceivedBall = true;
@@ -550,6 +629,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   loseBall(): void {
     this.hasBall = false;
     this.recentlyLostBall = true;
+    this.cancelCharge();
     
     this.scene.time.delayedCall(2000, () => {
       this.recentlyLostBall = false;
@@ -558,6 +638,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   
   applyStun(duration: number): void {
     this.isStunned = true;
+    this.cancelCharge();
     
     let actualDuration = duration;
     if (this.upgradeSystem) {
@@ -571,10 +652,26 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.scene.tweens.add({
       targets: this,
       tint: 0xff0000,
-      duration: 100,
+      duration: 80,
       yoyo: true,
-      repeat: Math.floor(actualDuration / 200)
+      repeat: Math.floor(actualDuration / 160)
     });
+  }
+  
+  applyHitstop(duration: number): void {
+    this.isHitstop = true;
+    this.scene.time.delayedCall(duration, () => {
+      this.isHitstop = false;
+    });
+  }
+  
+  applyKnockback(dirX: number, dirY: number, force: number): void {
+    const len = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
+    const vel = this.body!.velocity;
+    this.setVelocity(
+      vel.x + (dirX / len) * force,
+      vel.y + (dirY / len) * force
+    );
   }
   
   restoreStamina(amount: number): void {
@@ -605,7 +702,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     });
   }
   
-  // Get cooldown percentages for UI
   getCooldowns(): { shoot: number; pass: number; tackle: number; dodge: number } {
     return {
       shoot: this.shootCooldown / TUNING.COOLDOWN_SHOOT,
@@ -617,6 +713,10 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   
   canShoot(): boolean {
     return this.hasBall && this.shootCooldown <= 0 && !this.isStunned && !this.isDodging;
+  }
+  
+  canPass(): boolean {
+    return this.hasBall && this.passCooldown <= 0 && !this.isStunned && !this.isDodging;
   }
   
   getBallOffset(): { x: number; y: number } {
@@ -631,10 +731,15 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return this.facingAngle;
   }
   
+  getChargePercentage(): number {
+    return this.getChargePercent();
+  }
+  
   destroy(fromScene?: boolean): void {
     this.stickGraphics?.destroy();
     this.shotLineGraphics?.destroy();
     this.passLineGraphics?.destroy();
+    this.chargeGraphics?.destroy();
     super.destroy(fromScene);
   }
 }

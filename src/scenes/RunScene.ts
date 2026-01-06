@@ -310,6 +310,11 @@ export class RunScene extends Phaser.Scene {
     });
   }
   
+  // Debug display state
+  private debugDisplayEnabled: boolean = false;
+  private debugGraphics?: Phaser.GameObjects.Graphics;
+  private debugText?: Phaser.GameObjects.Text;
+  
   private setupDebugKeys(): void {
     // G key toggles goal sensor debug view
     this.input.keyboard?.on('keydown-G', () => {
@@ -320,6 +325,67 @@ export class RunScene extends Phaser.Scene {
         'Debug'
       );
     });
+    
+    // F1 toggles debug display (possession, objective, AI roles)
+    this.input.keyboard?.on('keydown-F1', () => {
+      this.debugDisplayEnabled = !this.debugDisplayEnabled;
+      this.updateDebugDisplay();
+      this.toastManager.info(
+        this.debugDisplayEnabled ? 'Debug display: ON' : 'Debug display: OFF',
+        'Debug'
+      );
+    });
+  }
+  
+  private updateDebugDisplay(): void {
+    if (!this.debugDisplayEnabled) {
+      this.debugGraphics?.clear();
+      this.debugText?.setVisible(false);
+      return;
+    }
+    
+    // Create debug elements if needed
+    if (!this.debugGraphics) {
+      this.debugGraphics = this.add.graphics();
+      this.debugGraphics.setDepth(200);
+    }
+    
+    if (!this.debugText) {
+      this.debugText = this.add.text(10, 140, '', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#00ff00',
+        backgroundColor: '#000000aa',
+        padding: { x: 6, y: 4 }
+      });
+      this.debugText.setScrollFactor(0);
+      this.debugText.setDepth(200);
+    }
+    
+    this.debugText.setVisible(true);
+    
+    // Build debug info
+    const objective = this.momentSystem.getObjectiveDescriptor();
+    const possession = this.player.hasBall ? 'PLAYER' :
+                       this.teammates.some(t => t.hasBall) ? 'TEAMMATE' :
+                       this.enemies.some(e => e.hasBall) ? 'ENEMY' : 'LOOSE';
+    
+    const lines = [
+      `=== DEBUG (F1 to hide) ===`,
+      `Possession: ${possession}`,
+      `Objective: ${objective.type}`,
+      `Urgency: ${(objective.urgency * 100).toFixed(0)}%`,
+      `Time: ${objective.timeRemaining}s`,
+      ``,
+      `Player: ${this.player.hasBall ? 'HAS BALL' : 'no ball'}`,
+      `  Charging: ${this.player.isCharging ? 'YES ' + Math.floor(this.player.getChargePercentage() * 100) + '%' : 'no'}`,
+      `  Stunned: ${this.player.isStunned}`,
+      ``,
+      `Ball speed: ${Math.floor(this.ball.getSpeed())}`,
+      `Ball owner: ${this.ball.owner ? 'owned' : 'loose'}`
+    ];
+    
+    this.debugText.setText(lines.join('\n'));
   }
   
   private updateGoalSensorDebug(): void {
@@ -738,7 +804,7 @@ export class RunScene extends Phaser.Scene {
   }
   
   private attemptTackle(tackler: any, target?: any): void {
-    const tackleRange = TUNING.AI_TACKLE_RANGE + 10;
+    const tackleRange = TUNING.AI_TACKLE_DISTANCE + 10;
     
     let carrier: any = null;
     if (target && target.hasBall) {
@@ -756,16 +822,56 @@ export class RunScene extends Phaser.Scene {
       const tackleSuccess = TUNING.TACKLE_SUCCESS_BASE + (tackler.stats?.tackle || 5) * TUNING.TACKLE_SUCCESS_SCALE;
       
       if (Math.random() < tackleSuccess) {
-        carrier.loseBall();
-        carrier.applyStun(300);
-        this.ball.drop();
+        // === SUCCESSFUL TACKLE - IMPACTFUL! ===
         
-        this.particleManager.tackleImpact(carrier.x, carrier.y);
+        // 1) Apply hitstop to both for micro-freeze impact feel
+        if (tackler.applyHitstop) tackler.applyHitstop(TUNING.TACKLE_HITSTOP_MS);
+        if (carrier.applyHitstop) carrier.applyHitstop(TUNING.TACKLE_HITSTOP_MS);
+        
+        // 2) Carrier loses ball and gets stunned
+        carrier.loseBall();
+        carrier.applyStun(TUNING.TACKLE_STUN_MS);
+        
+        // 3) Apply knockback to carrier - push them AWAY from tackler
+        const dx = carrier.x - tackler.x;
+        const dy = carrier.y - tackler.y;
+        const knockbackForce = TUNING.TACKLE_KNOCKBACK_CARRIER;
+        if (carrier.applyKnockback) {
+          carrier.applyKnockback(dx, dy, knockbackForce);
+        } else if (carrier.body) {
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          carrier.body.velocity.x += (dx / len) * knockbackForce;
+          carrier.body.velocity.y += (dy / len) * knockbackForce;
+        }
+        
+        // 4) Ball pops loose with strong impulse AWAY from tackler
+        const popDir = { x: dx, y: dy };
+        this.ball.kick(popDir, TUNING.TACKLE_BALL_POP, 0, 'tackle');
+        this.ball.isLoose = true;
+        this.ball.owner = null;
+        
+        // 5) VFX: spark particles at contact point
+        this.particleManager.tackleImpact(
+          (tackler.x + carrier.x) / 2,
+          (tackler.y + carrier.y) / 2
+        );
+        
+        // Additional spark burst for big hit
+        this.particleManager.sparkBurst(carrier.x, carrier.y, 0xffd700, 8);
+        
+        // 6) Camera shake - chunky!
+        this.cameras.main.shake(TUNING.TACKLE_SHAKE_DURATION, TUNING.TACKLE_SHAKE);
+        
+        // 7) Flash the carrier
+        if (carrier.setTint) {
+          carrier.setTint(0xffffff);
+          this.time.delayedCall(60, () => carrier.clearTint?.());
+        }
+        
+        // 8) Sound
         this.audioSystem.playSteal();
         
-        // Camera shake
-        this.cameras.main.shake(TUNING.CAMERA_SHAKE_TACKLE_DURATION, TUNING.CAMERA_SHAKE_TACKLE);
-        
+        // Stats
         if (tackler === this.player) {
           this.momentStats.tacklesWon++;
           this.upgradeSystem.trigger('onSteal', {
@@ -778,7 +884,16 @@ export class RunScene extends Phaser.Scene {
           this.momentSystem.playerStole();
         }
       } else {
-        tackler.applyStun(200);
+        // Failed tackle - tackler bounces off and gets minor stun
+        tackler.applyStun(180);
+        
+        // Small knockback to tackler (bounced off)
+        const dx = tackler.x - carrier.x;
+        const dy = tackler.y - carrier.y;
+        if (tackler.applyKnockback) {
+          tackler.applyKnockback(dx, dy, TUNING.TACKLE_KNOCKBACK * 0.5);
+        }
+        
         if (tackler === this.player) {
           this.momentStats.tacklesLost++;
         }
@@ -997,6 +1112,15 @@ export class RunScene extends Phaser.Scene {
     
     // Update AI system team states
     this.aiSystem.updateTeamStates(this.ball, this.player, this.teammates, this.enemies, delta);
+    
+    // Pass objective information to AI for adaptive behavior
+    const objective = this.momentSystem.getObjectiveDescriptor();
+    this.aiSystem.setObjective(objective);
+    
+    // Update debug display if enabled
+    if (this.debugDisplayEnabled) {
+      this.updateDebugDisplay();
+    }
     
     // Update teammates
     this.teammates.forEach((t) => t.update(delta));

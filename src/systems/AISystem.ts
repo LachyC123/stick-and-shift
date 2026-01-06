@@ -1,9 +1,11 @@
 // AISystem for Stick & Shift
 // Manages AI behavior for teammates and enemies
 // Improved: team tactics, anti-huddle separation, formation shapes, smarter decisions
+// Added: objective awareness, better pressing, improved tackle decisions
 
 import Phaser from 'phaser';
 import * as TUNING from '../data/tuning';
+import { ObjectiveDescriptor } from './MomentSystem';
 
 export type AIRole = 'defender' | 'midfielder' | 'forward' | 'goalkeeper' | 'sweeper';
 export type AIState = 'idle' | 'chase' | 'attack' | 'defend' | 'support' | 'return' | 'press' | 'mark';
@@ -50,7 +52,7 @@ export class AISystem {
   // Chase tracking (anti-huddle)
   private playerTeamChasers: Set<any> = new Set();
   private enemyTeamChasers: Set<any> = new Set();
-  private primaryChaser: Map<string, any> = new Map();  // Track primary chaser with hysteresis
+  private primaryChaser: Map<string, any> = new Map();
   
   // Pass cooldown tracking
   private lastPassTime: Map<any, number> = new Map();
@@ -61,8 +63,89 @@ export class AISystem {
   // Failed tackle cooldown (prevents spam)
   private tackleBackoffUntil: Map<any, number> = new Map();
   
+  // Current objective for AI adjustments
+  private currentObjective: ObjectiveDescriptor = {
+    type: 'score',
+    timeRemaining: 60,
+    targetTeam: 'player',
+    urgency: 0
+  };
+  
+  // Dynamic AI difficulty scaling
+  private difficultyMultiplier: number = 1.0;
+  private momentNumber: number = 1;
+  
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
+  }
+  
+  /**
+   * Set the current objective descriptor from MomentSystem
+   * This allows AI to adapt behavior based on current objective
+   */
+  setObjective(objective: ObjectiveDescriptor): void {
+    this.currentObjective = objective;
+  }
+  
+  /**
+   * Set difficulty scaling (increases with moment number)
+   */
+  setDifficulty(momentNumber: number, isBoss: boolean = false): void {
+    this.momentNumber = momentNumber;
+    // Gradual difficulty increase: +5% per moment, +20% for boss
+    this.difficultyMultiplier = 1.0 + (momentNumber - 1) * 0.05 + (isBoss ? 0.20 : 0);
+  }
+  
+  /**
+   * Get adjusted AI aggression based on objective
+   */
+  private getAdjustedAggression(baseAggression: number): number {
+    let adjustment = 0;
+    
+    switch (this.currentObjective.type) {
+      case 'force_turnovers':
+        adjustment = 0.25;  // Much more aggressive
+        break;
+      case 'score':
+        // More aggressive when urgent
+        adjustment = this.currentObjective.urgency * 0.15;
+        break;
+      case 'defend':
+      case 'hold_possession':
+        adjustment = -0.15;  // Less aggressive, more cautious
+        break;
+      case 'survive':
+        adjustment = -0.1;
+        break;
+    }
+    
+    // Apply difficulty multiplier
+    const adjustedAggression = (baseAggression + adjustment) * this.difficultyMultiplier;
+    return Phaser.Math.Clamp(adjustedAggression, 0, 1);
+  }
+  
+  /**
+   * Get line of engagement (how high AI pushes) based on objective
+   */
+  private getLineOfEngagement(isAttacking: boolean): number {
+    let baseLine = isAttacking ? 0.55 : 0.35;  // fraction of field
+    
+    switch (this.currentObjective.type) {
+      case 'score':
+        if (this.currentObjective.urgency > 0.6) {
+          baseLine += 0.12;  // Push higher when urgent
+        }
+        break;
+      case 'defend':
+      case 'hold_possession':
+        baseLine -= 0.08;  // Stay deeper
+        break;
+      case 'force_turnovers':
+        baseLine += 0.1;  // High press
+        break;
+    }
+    
+    return Phaser.Math.Clamp(baseLine, 0.2, 0.85);
   }
   
   // Update team states based on possession
@@ -465,20 +548,93 @@ export class AISystem {
     }
     
     const distToCarrier = Phaser.Math.Distance.Between(entity.x, entity.y, ballCarrier.x, ballCarrier.y);
+    const allEnemies = this.scene.registry.get('enemies') || [];
     
-    // Press based on aggressiveness
-    const pressRange = 100 + config.aggressiveness * 80;
+    // Get adjusted aggression based on objective
+    const aggression = this.getAdjustedAggression(config.aggressiveness);
     
-    if (distToCarrier < pressRange) {
-      if (distToCarrier < TUNING.AI_TACKLE_RANGE && !this.isTackleOnCooldown(entity)) {
-        return { action: 'tackle', targetEntity: ballCarrier, priority: 10 };
-      }
-      return { action: 'move', targetX: ballCarrier.x, targetY: ballCarrier.y, priority: 8 };
+    // Calculate press range based on aggression and objective
+    let pressRange = TUNING.AI_PRESS_DISTANCE * (0.6 + aggression * 0.5);
+    
+    // Force turnovers = higher press
+    if (this.currentObjective.type === 'force_turnovers') {
+      pressRange *= 1.25;
     }
     
-    // Return to defensive position
+    // Find who is closest to carrier (assign pressing duty)
+    const allDefenders = allEnemies.length > 0 ? allEnemies : [];
+    const distancesToCarrier = allDefenders.map((e: any) => ({
+      entity: e,
+      dist: Phaser.Math.Distance.Between(e.x, e.y, ballCarrier.x, ballCarrier.y)
+    }));
+    distancesToCarrier.sort((a: { dist: number }, b: { dist: number }) => a.dist - b.dist);
+    
+    const isPrimaryPresser = distancesToCarrier[0]?.entity === entity;
+    const isSecondaryPresser = distancesToCarrier[1]?.entity === entity;
+    
+    if (isPrimaryPresser && distToCarrier < pressRange) {
+      // Primary presser: close down and attempt tackle
+      
+      // Check angle for tackle (must be approaching from good angle)
+      const dx = ballCarrier.x - entity.x;
+      const dy = ballCarrier.y - entity.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const facingCarrier = dx / dist;  // How much we're facing carrier
+      
+      const canTackle = !this.isTackleOnCooldown(entity) && 
+                        distToCarrier < TUNING.AI_TACKLE_DISTANCE &&
+                        facingCarrier > TUNING.AI_TACKLE_ANGLE_COS;
+      
+      if (canTackle && aggression > 0.35) {
+        return { action: 'tackle', targetEntity: ballCarrier, priority: 10 };
+      }
+      
+      // Contain behavior: approach from goal-side to force wide
+      const goalX = 0;  // Enemy goal is left
+      const containX = ballCarrier.x + (entity.x < ballCarrier.x ? -30 : 30);
+      const containY = ballCarrier.y + (entity.y > ballCarrier.y ? -20 : 20);
+      
+      // Move to cut off goal angle
+      const targetX = Phaser.Math.Linear(ballCarrier.x, containX, 0.7);
+      const targetY = Phaser.Math.Linear(ballCarrier.y, containY, 0.3);
+      
+      return { action: 'move', targetX, targetY, priority: 9 };
+    }
+    
+    if (isSecondaryPresser && distToCarrier < pressRange * 1.2) {
+      // Secondary: cover the best passing lane
+      const coverPos = this.getCoverPassingLane(entity, ballCarrier, [player, ...teammates]);
+      return { action: 'move', targetX: coverPos.x, targetY: coverPos.y, priority: 8 };
+    }
+    
+    // Others: hold shape or mark
+    if (config.role === 'defender') {
+      // Block shot line
+      const shotLinePos = this.getBlockShotLine(entity, ballCarrier);
+      return { action: 'move', targetX: shotLinePos.x, targetY: shotLinePos.y, priority: 7 };
+    }
+    
+    // Return to defensive formation
+    const lineOfEngagement = this.getLineOfEngagement(false);
     const homePos = this.getFormationPosition(entity, config.role, slotIndex, false, ball);
-    return { action: 'move', targetX: homePos.x, targetY: homePos.y, priority: 4 };
+    homePos.x = Math.min(homePos.x, this.fieldWidth * lineOfEngagement);
+    
+    return { action: 'move', targetX: homePos.x, targetY: homePos.y, priority: 5 };
+  }
+  
+  /**
+   * Get position to block shot line between carrier and goal
+   */
+  private getBlockShotLine(entity: any, carrier: any): { x: number; y: number } {
+    const goalX = 0;  // Enemy goal
+    const goalY = this.fieldHeight / 2;
+    
+    // Stand on line between carrier and goal, closer to carrier
+    const t = 0.35;  // Closer to carrier
+    const x = Phaser.Math.Linear(carrier.x, goalX, t);
+    const y = Phaser.Math.Linear(carrier.y, goalY, t);
+    
+    return { x: Phaser.Math.Clamp(x, 60, this.fieldWidth - 60), y };
   }
   
   // Helper methods

@@ -238,6 +238,36 @@ export class ParticleManager {
     });
   }
   
+  // Spark burst effect for impactful tackles
+  sparkBurst(x: number, y: number, color: number = 0xffd700, count: number = 8): void {
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.3;
+      const speed = 60 + Math.random() * 100;
+      const size = 3 + Math.random() * 3;
+      
+      const spark = this.scene.add.graphics();
+      spark.fillStyle(color, 1);
+      spark.fillCircle(0, 0, size);
+      spark.setPosition(x, y);
+      spark.setDepth(55);
+      
+      const targetX = x + Math.cos(angle) * speed;
+      const targetY = y + Math.sin(angle) * speed;
+      
+      this.scene.tweens.add({
+        targets: spark,
+        x: targetX,
+        y: targetY,
+        alpha: 0,
+        scaleX: 0.2,
+        scaleY: 0.2,
+        duration: 200 + Math.random() * 150,
+        ease: 'Power2',
+        onComplete: () => spark.destroy()
+      });
+    }
+  }
+  
   // Clean up all emitters
   destroy(): void {
     this.emitters.forEach(emitter => emitter.destroy());
