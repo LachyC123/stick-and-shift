@@ -5,6 +5,9 @@
 import Phaser from 'phaser';
 import * as TUNING from '../data/tuning';
 
+export type PossessionTeam = 'player' | 'enemy' | 'none';
+export type PossessionReason = 'tackle' | 'intercept' | 'pickup' | 'passReceive' | 'kickoff' | 'goal';
+
 export class Ball extends Phaser.Physics.Arcade.Sprite {
   // Ownership
   public owner: any = null;  // Player, TeammateAI, or EnemyAI
@@ -15,6 +18,9 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   public lastOwner: any = null;
   public lastShooter: any = null;
   public isRebound: boolean = false;
+  
+  // Possession tracking for steal detection
+  public lastPossessingTeam: PossessionTeam = 'none';
   
   // Pass targeting for assist logic
   public intendedReceiver: any = null;
@@ -344,12 +350,23 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
   }
   
   // Attach to new owner
-  attachTo(newOwner: any): void {
+  /**
+   * Attach ball to a new owner
+   * Returns the previous possessing team for steal detection
+   */
+  attachTo(newOwner: any): PossessionTeam {
+    const prevTeam = this.lastPossessingTeam;
+    
     this.lastOwner = this.owner;
     this.owner = newOwner;
     this.isLoose = false;
     this.isRebound = false;
     this.lastShooter = null;
+    
+    // Update possession team tracking
+    if (newOwner) {
+      this.lastPossessingTeam = this.getTeamOf(newOwner);
+    }
     
     // Clear pass targeting
     this.intendedReceiver = null;
@@ -362,6 +379,46 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     this.boomerangOrigin = undefined;
     this.isPredictive = false;
     this.magnetTarget = undefined;
+    
+    return prevTeam;
+  }
+  
+  /**
+   * Get which team an entity belongs to
+   * Player and TeammateAI are 'player' team, EnemyAI is 'enemy' team
+   */
+  getTeamOf(entity: any): PossessionTeam {
+    if (!entity) return 'none';
+    
+    // Check if it's an enemy (has enemyType property or specific constructor name)
+    if (entity.enemyType !== undefined || entity.constructor?.name === 'EnemyAI') {
+      return 'enemy';
+    }
+    
+    // Check if it's player or teammate
+    if (entity.character !== undefined || entity.constructor?.name === 'Player' || 
+        entity.constructor?.name === 'TeammateAI' || entity.aiConfig?.role !== undefined) {
+      // TeammateAI has aiConfig but no enemyType, Player has character
+      if (entity.enemyType === undefined) {
+        return 'player';
+      }
+    }
+    
+    return 'none';
+  }
+  
+  /**
+   * Check if possession changed from enemy to player team (a steal)
+   */
+  wasStolen(prevTeam: PossessionTeam, newTeam: PossessionTeam): boolean {
+    return prevTeam === 'enemy' && newTeam === 'player';
+  }
+  
+  /**
+   * Set the last possessing team (for initialization)
+   */
+  setLastPossessingTeam(team: PossessionTeam): void {
+    this.lastPossessingTeam = team;
   }
   
   // Drop ball (tackle, etc.)
@@ -390,6 +447,9 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     this.isRebound = false;
     this.prevX = 600;
     this.prevY = 350;
+    
+    // Reset possession tracking (ball is neutral until kickoff)
+    this.lastPossessingTeam = 'none';
     
     // Clear trail
     this.trailPoints = [];
