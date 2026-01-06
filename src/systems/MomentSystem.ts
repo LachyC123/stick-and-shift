@@ -16,6 +16,14 @@ export interface MomentState {
   objectiveTarget: number;
 }
 
+/** Simplified objective descriptor for AI to consume */
+export interface ObjectiveDescriptor {
+  type: 'score' | 'defend' | 'hold_possession' | 'force_turnovers' | 'pc_score' | 'survive' | 'generic';
+  timeRemaining: number;
+  targetTeam: 'player' | 'enemy';
+  urgency: number;  // 0-1, higher = more urgent (close to objective or low time)
+}
+
 export class MomentSystem extends Phaser.Events.EventEmitter {
   private scene: Phaser.Scene;
   private moments: MomentDefinition[] = [];
@@ -65,6 +73,69 @@ export class MomentSystem extends Phaser.Events.EventEmitter {
   // Get current moment state
   getCurrentState(): MomentState | undefined {
     return this.currentState;
+  }
+  
+  /**
+   * Get a simplified objective descriptor for AI to consume
+   * This allows AI to adjust behavior based on current objective
+   */
+  getObjectiveDescriptor(): ObjectiveDescriptor {
+    if (!this.currentState) {
+      return {
+        type: 'generic',
+        timeRemaining: 60,
+        targetTeam: 'player',
+        urgency: 0
+      };
+    }
+    
+    const state = this.currentState;
+    const objective = state.definition.objective;
+    
+    // Map objective types
+    let type: ObjectiveDescriptor['type'] = 'generic';
+    switch (objective) {
+      case 'score':
+      case 'multiGoal':
+      case 'reboundGoal':
+      case 'assist':
+        type = 'score';
+        break;
+      case 'defend':
+      case 'survive':
+        type = 'defend';
+        break;
+      case 'penaltyCorner':
+      case 'pcBattle':
+        type = 'pc_score';
+        break;
+      case 'turnover':
+      case 'pressWin':
+        type = 'force_turnovers';
+        break;
+      case 'possession':
+        type = 'hold_possession';
+        break;
+      default:
+        type = 'score';  // Default to scoring
+    }
+    
+    // Calculate urgency (0-1)
+    const timeFraction = 1 - (state.timeRemaining / state.definition.duration);
+    const progressFraction = state.objectiveTarget > 0 
+      ? state.objectiveProgress / state.objectiveTarget 
+      : 0;
+    const urgency = Math.min(1, timeFraction * 0.6 + (1 - progressFraction) * 0.4);
+    
+    // Determine target team based on objective
+    const isDefensiveObjective = ['defend', 'survive', 'protectInjector'].includes(objective);
+    
+    return {
+      type,
+      timeRemaining: state.timeRemaining,
+      targetTeam: isDefensiveObjective ? 'enemy' : 'player',
+      urgency
+    };
   }
   
   // Start the current moment

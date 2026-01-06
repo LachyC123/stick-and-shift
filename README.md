@@ -57,15 +57,18 @@ The production build will be in the `dist/` folder.
 | Action | Key |
 |--------|-----|
 | Move | WASD or Arrow Keys |
-| Shoot | Space or Left Click (instant trigger) |
+| Shoot | Space or Left Click (tap for quick shot) |
+| Charged Shot | Hold Space or Mouse, release for power shot |
 | Pass | E |
 | Tackle | Q |
 | Dodge | Shift |
 | Aim | Mouse (or auto-aim toward goal if keyboard only) |
 | Pause | Escape or P |
 | Toggle Controls | H (in-game) |
+| Goal Debug | G (shows goal sensor outlines) |
+| Debug Display | F1 (shows possession, objective, AI state) |
 
-> **Tip**: Shooting triggers instantly on keydown/click - no need to hold!
+> **Tip**: Hold shoot to charge up for a powerful shot (up to +35% power)!
 
 ## 🏆 Game Structure
 
@@ -274,6 +277,57 @@ MIT License - feel free to use this project as a base for your own games!
 - Field hockey for being an awesome sport
 
 ## 📋 CHANGELOG
+
+### v1.3.0 - Gameplay Impact & AI Challenge Update
+
+#### A) Impactful Tackles
+- Added tackle impact constants: `TACKLE_KNOCKBACK=340`, `TACKLE_KNOCKBACK_CARRIER=480`
+- Knockback pushes tackled players away from the tackler
+- `TACKLE_STUN_MS=220` stun duration on successful tackle
+- `TACKLE_HITSTOP_MS=55` micro-freeze for satisfying impact feel
+- Ball pops loose with strong impulse (`TACKLE_BALL_POP=420`) away from tackler
+- Spark particle burst at contact point for visual feedback
+- White flash on tackled player for added impact
+
+#### B) Faster Pass & Shot
+- Increased `PASS_SPEED_BASE` to 950 and `PASS_SPEED_MAX` to 1400
+- Increased `SHOT_SPEED_BASE` to 1200 and `SHOT_SPEED_MAX` to 1750
+- Reduced ball drag (`BALL_DRAG=0.990`) for faster travel
+- `BALL_MAX_SPEED` raised to 1850 to support powerful shots
+- Camera nudge on pass for subtle feedback
+
+#### C) Charged Shot System
+- Hold SPACE or mouse button to charge, release to fire
+- `CHARGE_MIN_MS=80`, `CHARGE_MAX_MS=850` for timing window
+- `CHARGE_POWER_MULT_MAX=1.35` power boost at full charge
+- Visual charge bar above player while charging
+- Stronger camera shake for charged shots
+- Charge canceled on stun or possession loss
+
+#### D) Smarter AI with Objective Awareness
+- `ObjectiveDescriptor` passed from MomentSystem to AISystem
+- AI adjusts aggression based on objective type (force_turnovers = high press)
+- Dynamic line of engagement pushes higher when urgent
+- Primary presser assigned to close down ball carrier
+- Secondary presser covers passing lanes
+- Defenders block shot lines when not actively pressing
+- Contains behavior: presser approaches from goal-side to force wide
+- Tackle angle check prevents unrealistic tackles from behind
+- Difficulty scaling increases with moment number (+5% per moment)
+
+#### E) Debug Display Toggle
+- Press `F1` to toggle debug overlay
+- Shows: possession state, objective type, urgency %, time remaining
+- Displays player charging state and ball speed
+- Useful for verifying AI behavior and game state
+
+#### F) Code Quality
+- `sparkBurst()` particle effect for tackle impacts
+- `applyKnockback()` and `applyHitstop()` methods on Player
+- Cleaner separation of objective logic in MomentSystem
+- Type-safe objective descriptor interface
+
+---
 
 ### v1.2.0 - Game Feel & AI Improvements
 
