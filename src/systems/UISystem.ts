@@ -67,6 +67,9 @@ export class UISystem {
   // Pause menu
   private pauseOverlay?: Phaser.GameObjects.Container;
   
+  // Cup Run display
+  private cupRunText?: Phaser.GameObjects.Text;
+  
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
     this.container = scene.add.container(0, 0);
@@ -123,6 +126,15 @@ export class UISystem {
       color: '#bdc3c7'
     });
     this.container.add(this.momentText);
+    
+    // Cup Run score (below moment counter)
+    this.cupRunText = this.scene.add.text(20, 45, 'Cup: You 0 - 0 Enemy (First to 5)', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '14px',
+      color: '#f39c12',
+      fontStyle: 'bold'
+    });
+    this.container.add(this.cupRunText);
     
     // Possession indicator (top right)
     this.possessionIndicator = this.scene.add.graphics();
@@ -756,6 +768,22 @@ export class UISystem {
       this.momentText.setColor('#e74c3c');
     } else {
       this.momentText.setColor('#bdc3c7');
+    }
+  }
+  
+  // Update Cup Run score display
+  updateCupRun(playerPoints: number, enemyPoints: number, pointsToWin: number = 5): void {
+    if (!this.cupRunText) return;
+    
+    this.cupRunText.setText(`Cup: You ${playerPoints} - ${enemyPoints} Enemy (First to ${pointsToWin})`);
+    
+    // Color based on who's winning
+    if (playerPoints > enemyPoints) {
+      this.cupRunText.setColor('#2ecc71');  // Green - player ahead
+    } else if (enemyPoints > playerPoints) {
+      this.cupRunText.setColor('#e74c3c');  // Red - enemy ahead
+    } else {
+      this.cupRunText.setColor('#f39c12');  // Orange - tied
     }
   }
   
