@@ -275,6 +275,30 @@ MIT License - feel free to use this project as a base for your own games!
 
 ## 📋 CHANGELOG
 
+### v1.1.1 - Loading Screen Fix
+
+#### Boot Scene Reliability
+- Complete rewrite of `BootScene.ts` for fail-safe loading
+- Added progress bar with real-time status updates
+- Implemented watchdog timer that detects loading stalls (>4 seconds)
+- Global error handlers catch and display JS errors and promise rejections
+- On-screen error display for debugging (even on GitHub Pages)
+- Graceful fallback: if loading stalls, forces transition to menu after warning
+- HTML-level loading watchdog as backup before Phaser even loads
+
+#### Error Visibility
+- Loading errors now display on-screen in red with clear messages
+- Loading stall warnings appear after 5 seconds (HTML level)
+- Console logging at every stage for easy debugging
+- Fallback texture generation if TextureFactory fails
+
+#### GitHub Pages Support
+- Correct base path configuration via `GITHUB_PAGES` env variable
+- Updated `deploy.yml` with proper environment variables
+- No leading slashes in asset paths (all assets are runtime-generated anyway)
+
+---
+
 ### v1.1.0 - Major Improvements Update
 
 #### A) Shoot Button / Input Reliability
