@@ -41,41 +41,148 @@
       font-family: 'Arial', sans-serif;
       font-size: 24px;
       text-align: center;
+      z-index: 100;
+    }
+    
+    .loading-title {
+      font-size: 32px;
+      color: #f1c40f;
+      margin-bottom: 10px;
+    }
+    
+    .loading-subtitle {
+      font-size: 14px;
+      color: #bdc3c7;
+      margin-bottom: 20px;
     }
     
     .loading-bar {
       width: 300px;
-      height: 20px;
-      background: #333;
-      border-radius: 10px;
-      margin-top: 20px;
+      height: 24px;
+      background: #2c3e50;
+      border-radius: 12px;
+      margin: 0 auto;
       overflow: hidden;
+      border: 2px solid #3498db;
     }
     
     .loading-fill {
-      width: 0%;
+      width: 10%;
       height: 100%;
-      background: linear-gradient(90deg, #00ff88, #00cc66);
+      background: linear-gradient(90deg, #27ae60, #2ecc71);
       border-radius: 10px;
-      animation: pulse 1.5s ease-in-out infinite;
+      animation: loading-pulse 1.5s ease-in-out infinite;
+      transition: width 0.3s ease;
     }
     
-    @keyframes pulse {
+    @keyframes loading-pulse {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
+      50% { opacity: 0.8; }
+    }
+    
+    .loading-status {
+      font-size: 12px;
+      color: #7f8c8d;
+      margin-top: 15px;
+      min-height: 20px;
+    }
+    
+    .loading-error {
+      font-size: 14px;
+      color: #e74c3c;
+      margin-top: 15px;
+      max-width: 400px;
+      display: none;
+    }
+    
+    .loading-warning {
+      font-size: 12px;
+      color: #f39c12;
+      margin-top: 10px;
+      display: none;
+    }
+    
+    noscript {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #1a1a2e;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      z-index: 9999;
     }
   </style>
 </head>
 <body>
+  <noscript>
+    <h1 style="color: #e74c3c;">JavaScript Required</h1>
+    <p style="margin-top: 20px;">Stick & Shift requires JavaScript to run.</p>
+    <p style="margin-top: 10px; color: #7f8c8d;">Please enable JavaScript in your browser settings.</p>
+  </noscript>
+  
   <div id="game-container">
     <div id="loading">
-      <div>🏑 STICK & SHIFT</div>
-      <div style="font-size: 14px; margin-top: 10px;">Loading...</div>
+      <div class="loading-title">🏑 STICK & SHIFT</div>
+      <div class="loading-subtitle">Field Hockey Roguelike</div>
       <div class="loading-bar">
         <div class="loading-fill" id="loading-fill"></div>
       </div>
+      <div class="loading-status" id="loading-status">Initializing...</div>
+      <div class="loading-warning" id="loading-warning">⚠️ Loading is taking longer than expected...</div>
+      <div class="loading-error" id="loading-error"></div>
     </div>
   </div>
+  
+  <script>
+    // Pre-game loading watchdog (runs before Phaser loads)
+    (function() {
+      var startTime = Date.now();
+      var statusEl = document.getElementById('loading-status');
+      var warningEl = document.getElementById('loading-warning');
+      var errorEl = document.getElementById('loading-error');
+      var fillEl = document.getElementById('loading-fill');
+      
+      // Animate loading bar while waiting
+      var animProgress = 10;
+      var animInterval = setInterval(function() {
+        animProgress += 2;
+        if (animProgress > 40) animProgress = 10; // Loop between 10-40%
+        fillEl.style.width = animProgress + '%';
+      }, 200);
+      
+      // Show warning if taking too long
+      var warningTimeout = setTimeout(function() {
+        warningEl.style.display = 'block';
+        statusEl.textContent = 'Still loading game engine...';
+      }, 5000);
+      
+      // Show error if really stuck
+      var errorTimeout = setTimeout(function() {
+        clearInterval(animInterval);
+        errorEl.innerHTML = '❌ Loading stalled. Please refresh the page.<br><small>If this persists, check the browser console (F12)</small>';
+        errorEl.style.display = 'block';
+        fillEl.style.background = '#e74c3c';
+      }, 15000);
+      
+      // Expose function to clear timeouts when Phaser takes over
+      window.__clearLoadingWatchdog = function() {
+        clearTimeout(warningTimeout);
+        clearTimeout(errorTimeout);
+        clearInterval(animInterval);
+      };
+      
+      // Log start
+      console.log('[HTML] Loading watchdog started');
+    })();
+  </script>
+  
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
