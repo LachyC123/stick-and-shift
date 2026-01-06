@@ -763,7 +763,8 @@ export class RunScene extends Phaser.Scene {
         positions[i].x,
         positions[i].y,
         roles[i],
-        this.getColorIndex(this.character.color)
+        this.getColorIndex(this.character.color),
+        this.aiSystem  // Pass shared AISystem
       );
       
       teammate.onShoot = (power, angle) => {
@@ -830,7 +831,8 @@ export class RunScene extends Phaser.Scene {
         positions[i].y,
         roles[i % 3],
         isBoss ? 'boss' : 'normal',
-        difficulty
+        difficulty,
+        this.aiSystem  // Pass shared AISystem
       );
       
       enemy.onShoot = (power, angle) => {
@@ -1370,6 +1372,9 @@ export class RunScene extends Phaser.Scene {
       } else {
         // Failed tackle - tackler bounces off and gets minor stun
         tackler.applyStun(180);
+        
+        // Set tackle backoff so AI doesn't spam tackle attempts
+        this.aiSystem.setTackleBackoff(tackler, TUNING.AI_TACKLE_BACKOFF_MS);
         
         // Small knockback to tackler (bounced off)
         const dx = tackler.x - carrier.x;

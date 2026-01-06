@@ -183,6 +183,7 @@ export class AISystem {
   }
   
   // Get AI decision for a teammate
+  // IMPORTANT: NEVER returns 'wait' - teammates must always be moving/acting
   getTeammateDecision(
     entity: any,
     ball: any,
@@ -194,10 +195,8 @@ export class AISystem {
   ): AIDecision {
     const config = entity.aiConfig as AIConfig;
     
-    // Check decision timing
-    if (!this.shouldMakeDecision(entity)) {
-      return { action: 'wait', priority: 0 };
-    }
+    // NOTE: Removed shouldMakeDecision check - TeammateAI handles its own timing
+    // Every call must return a valid action, never 'wait' for idle
     
     // Calculate separation force (anti-huddle)
     const separation = this.calculateSeparation(entity, [player, ...teammates], TUNING.AI_SEPARATION_RADIUS);
@@ -211,7 +210,14 @@ export class AISystem {
     } else if (this.isTeamHasBall(ball, player, teammates)) {
       decision = this.getSupportDecision(entity, ball, player, teammates, enemies, config, slotIndex);
     } else {
+      // ENEMY HAS BALL - we must DEFEND
       decision = this.getDefensiveDecision(entity, ball, player, teammates, enemies, config, slotIndex);
+    }
+    
+    // FALLBACK: if somehow we got 'wait' or invalid action, move to formation
+    if (!decision || decision.action === 'wait' || (decision.action === 'move' && decision.targetX === undefined)) {
+      const formationPos = this.getFormationPosition(entity, config.role, slotIndex, true, ball);
+      decision = { action: 'move', targetX: formationPos.x, targetY: formationPos.y, priority: 1 };
     }
     
     // Apply separation to movement decisions
@@ -229,6 +235,7 @@ export class AISystem {
   }
   
   // Get AI decision for an enemy
+  // IMPORTANT: NEVER returns 'wait' - AI must always be moving/acting
   getEnemyDecision(
     entity: any,
     ball: any,
@@ -240,9 +247,8 @@ export class AISystem {
   ): AIDecision {
     const config = entity.aiConfig as AIConfig;
     
-    if (!this.shouldMakeDecision(entity)) {
-      return { action: 'wait', priority: 0 };
-    }
+    // NOTE: Removed shouldMakeDecision check - EnemyAI handles its own timing
+    // Every call must return a valid action, never 'wait' for idle
     
     const separation = this.calculateSeparation(entity, enemies, TUNING.AI_SEPARATION_RADIUS);
     
@@ -255,7 +261,14 @@ export class AISystem {
     } else if (this.isEnemyHasBall(ball, enemies)) {
       decision = this.getEnemySupportDecision(entity, ball, enemies, config, slotIndex);
     } else {
+      // PLAYER HAS BALL - we must DEFEND
       decision = this.getEnemyDefensiveDecision(entity, ball, player, teammates, config, slotIndex);
+    }
+    
+    // FALLBACK: if somehow we got 'wait' or invalid action, move to formation
+    if (!decision || decision.action === 'wait' || (decision.action === 'move' && decision.targetX === undefined)) {
+      const formationPos = this.getFormationPosition(entity, config.role, slotIndex, false, ball);
+      decision = { action: 'move', targetX: formationPos.x, targetY: formationPos.y, priority: 1 };
     }
     
     if (decision.action === 'move' && decision.targetX !== undefined && decision.targetY !== undefined) {
@@ -647,6 +660,10 @@ export class AISystem {
     };
   }
   
+  /**
+   * Teammate defensive decision - AGGRESSIVE DEFENDING
+   * Teammates actively press, tackle, and cover when enemy has ball
+   */
   private getDefensiveDecision(entity: any, ball: any, player: any, teammates: any[], enemies: any[], config: AIConfig, slotIndex: number): AIDecision {
     const ballCarrier = ball.owner;
     if (!ballCarrier) {
@@ -654,48 +671,139 @@ export class AISystem {
     }
     
     const distToCarrier = Phaser.Math.Distance.Between(entity.x, entity.y, ballCarrier.x, ballCarrier.y);
+    const goalX = this.fieldWidth;  // Player team defends right goal
+    const goalY = this.fieldHeight / 2;
+    
+    // Check if in danger zone (enemy near our goal)
+    const dangerZoneX = this.fieldWidth - 350;
+    const isInDangerZone = ballCarrier.x > dangerZoneX;
     
     // Assign defensive duties based on proximity
-    const allTeam = [player, ...teammates];
-    const distancesToCarrier = allTeam.map(t => ({
+    const allTeam = [player, ...teammates].filter(t => t !== entity);
+    const distancesToCarrier = [entity, ...allTeam].map(t => ({
       entity: t,
       dist: Phaser.Math.Distance.Between(t.x, t.y, ballCarrier.x, ballCarrier.y)
     }));
     distancesToCarrier.sort((a, b) => a.dist - b.dist);
     
-    const isClosestDefender = distancesToCarrier[0]?.entity === entity;
-    const isSecondDefender = distancesToCarrier[1]?.entity === entity;
+    const myRank = distancesToCarrier.findIndex(d => d.entity === entity);
+    const isPrimaryDefender = myRank === 0;
+    const isSecondDefender = myRank === 1;
+    const isThirdDefender = myRank === 2;
     
-    // Closest: mark ball carrier
-    if (isClosestDefender) {
-      // Check if we can tackle
-      const canTackle = !this.isTackleOnCooldown(entity) && distToCarrier < TUNING.AI_TACKLE_RANGE;
+    // Get adjusted aggression
+    const aggression = this.getAdjustedAggression(config.aggressiveness);
+    
+    // === PRIMARY DEFENDER: Press and tackle ===
+    if (isPrimaryDefender) {
+      // Tackle check - be aggressive!
+      const tackleRange = isInDangerZone ? TUNING.AI_TACKLE_RANGE + 15 : TUNING.AI_TACKLE_RANGE;
+      const canTackle = !this.isTackleOnCooldown(entity) && distToCarrier < tackleRange;
       
-      if (canTackle && config.aggressiveness > 0.4) {
+      if (canTackle && (aggression > 0.5 || isInDangerZone)) {
         return { action: 'tackle', targetEntity: ballCarrier, priority: 10 };
       }
       
-      // Press the carrier - get between them and goal
-      const pressX = ballCarrier.x - 40;
-      const pressY = ballCarrier.y + (entity.y > ballCarrier.y ? -20 : 20);
-      return { action: 'move', targetX: pressX, targetY: pressY, priority: 8 };
+      // Close down DIRECTLY - sprint at the carrier
+      return { action: 'move', targetX: ballCarrier.x, targetY: ballCarrier.y, priority: 9 };
     }
     
-    // Second closest: cover passing lane
-    if (isSecondDefender) {
-      const coverPos = this.getCoverPassingLane(entity, ballCarrier, enemies);
-      return { action: 'move', targetX: coverPos.x, targetY: coverPos.y, priority: 7 };
+    // === SECONDARY DEFENDER: Trap from angle / support press ===
+    if (isSecondDefender && distToCarrier < TUNING.AI_SECOND_PRESSER_RADIUS) {
+      // Can also tackle if close
+      const canTackle = !this.isTackleOnCooldown(entity) && distToCarrier < TUNING.AI_TACKLE_RANGE + 10;
+      
+      if (canTackle && aggression > 0.6) {
+        return { action: 'tackle', targetEntity: ballCarrier, priority: 9 };
+      }
+      
+      // Approach from goal-side to cut off
+      const angleToGoal = Math.atan2(goalY - ballCarrier.y, goalX - ballCarrier.x);
+      const trapDist = Math.min(distToCarrier * 0.5, 60);
+      const targetX = ballCarrier.x + Math.cos(angleToGoal) * trapDist;
+      const targetY = ballCarrier.y + Math.sin(angleToGoal) * trapDist;
+      
+      return { action: 'move', targetX, targetY, priority: 8 };
     }
     
-    // Others: goalkeeper-lite / hold shape
-    if (config.role === 'defender' || config.role === 'sweeper') {
-      const lastManPos = this.getLastManPosition(entity, ballCarrier);
-      return { action: 'move', targetX: lastManPos.x, targetY: lastManPos.y, priority: 6 };
+    // === THIRD DEFENDER: Block shot line / cover goal ===
+    if (isThirdDefender || config.role === 'defender' || config.role === 'sweeper') {
+      // Block shot line between carrier and goal
+      const shotLinePos = this.getTeammateBlockShotLine(entity, ballCarrier);
+      return { action: 'move', targetX: shotLinePos.x, targetY: shotLinePos.y, priority: 7 };
     }
     
-    // Hold formation
-    const formationPos = this.getFormationPosition(entity, config.role, slotIndex, true, ball);
-    return { action: 'move', targetX: formationPos.x, targetY: formationPos.y, priority: 5 };
+    // === OTHERS: Cover passing lanes ===
+    const coverPos = this.getTeammateCoverLane(entity, ballCarrier, enemies);
+    return { action: 'move', targetX: coverPos.x, targetY: coverPos.y, priority: 6 };
+  }
+  
+  /**
+   * Get position to block shot line for player's team (defending right goal)
+   */
+  private getTeammateBlockShotLine(entity: any, carrier: any): { x: number; y: number } {
+    const goalX = this.fieldWidth - 30;  // Player's goal
+    const goalY = this.fieldHeight / 2;
+    
+    // Calculate how close carrier is to goal
+    const carrierDistToGoal = Phaser.Math.Distance.Between(carrier.x, carrier.y, goalX, goalY);
+    
+    // In danger zone, position very close to goal
+    let t: number;
+    if (carrierDistToGoal < 200) {
+      t = 0.15;
+    } else if (carrierDistToGoal < 350) {
+      t = 0.25;
+    } else {
+      t = 0.4;
+    }
+    
+    const x = Phaser.Math.Linear(carrier.x, goalX, t);
+    const y = Phaser.Math.Linear(carrier.y, goalY, t);
+    
+    return { 
+      x: Phaser.Math.Clamp(x, 100, this.fieldWidth - 50), 
+      y: Phaser.Math.Clamp(y, 150, this.fieldHeight - 150)
+    };
+  }
+  
+  /**
+   * Get position to cover passing lanes for player's team
+   */
+  private getTeammateCoverLane(entity: any, ballCarrier: any, enemies: any[]): { x: number; y: number } {
+    const goalX = this.fieldWidth;  // Player's goal
+    const goalY = this.fieldHeight / 2;
+    
+    // Find dangerous enemies (ahead toward our goal)
+    const dangerousEnemies = enemies.filter(e => {
+      if (e === ballCarrier) return false;
+      const dist = Phaser.Math.Distance.Between(ballCarrier.x, ballCarrier.y, e.x, e.y);
+      return dist < 300 && e.x > ballCarrier.x;  // Ahead of carrier toward our goal
+    });
+    
+    if (dangerousEnemies.length === 0) {
+      // No dangerous enemies - position between carrier and goal
+      return {
+        x: Phaser.Math.Linear(ballCarrier.x, goalX, 0.4),
+        y: Phaser.Math.Linear(ballCarrier.y, goalY, 0.3)
+      };
+    }
+    
+    // Find most dangerous - closest to our goal
+    const mostDangerous = dangerousEnemies.reduce((best, e) => {
+      const distToGoal = Phaser.Math.Distance.Between(e.x, e.y, goalX, goalY);
+      const score = 1000 - distToGoal;
+      return score > best.score ? { entity: e, score } : best;
+    }, { entity: dangerousEnemies[0], score: -Infinity });
+    
+    // Position on the passing lane between carrier and dangerous enemy
+    const midX = (ballCarrier.x + mostDangerous.entity.x) / 2;
+    const midY = (ballCarrier.y + mostDangerous.entity.y) / 2;
+    
+    return {
+      x: Phaser.Math.Linear(midX, goalX, 0.2),
+      y: midY
+    };
   }
   
   /**
@@ -867,125 +975,176 @@ export class AISystem {
   private getEnemyDefensiveDecision(entity: any, ball: any, player: any, teammates: any[], config: AIConfig, slotIndex: number): AIDecision {
     const ballCarrier = ball.owner;
     if (!ballCarrier) {
-      return { action: 'wait', priority: 1 };
+      // Ball is loose or no carrier - move to defensive position
+      const formationPos = this.getFormationPosition(entity, config.role, slotIndex, false, ball);
+      return { action: 'move', targetX: formationPos.x, targetY: formationPos.y, priority: 5 };
     }
     
     const distToCarrier = Phaser.Math.Distance.Between(entity.x, entity.y, ballCarrier.x, ballCarrier.y);
     const allEnemies = this.scene.registry.get('enemies') || [];
+    const playerTeamAttackers = [player, ...teammates];
     
-    // Get adjusted aggression based on objective - MUCH MORE AGGRESSIVE
+    // Get adjusted aggression based on objective - VERY AGGRESSIVE
     const aggression = this.getAdjustedAggression(config.aggressiveness);
     
-    // Calculate press range based on aggression and objective - INCREASED
-    let pressRange = TUNING.AI_PRESS_DISTANCE * (0.8 + aggression * 0.4);
+    // Check if in danger zone (near our goal / D circle)
+    const dangerZoneX = 300;  // Within 300px of goal
+    const isInDangerZone = ballCarrier.x < dangerZoneX;
     
-    // Force turnovers = even higher press
-    if (this.currentObjective.type === 'force_turnovers') {
-      pressRange *= 1.35;
-    }
+    // Calculate press range - VERY LARGE so we always close down
+    let pressRange = TUNING.AI_PRESS_DISTANCE * (1.0 + aggression * 0.5);
+    if (isInDangerZone) pressRange *= 1.5;  // Press harder in danger zone
+    if (this.currentObjective.type === 'force_turnovers') pressRange *= 1.4;
     
-    // Find who is closest to carrier (assign pressing duty)
-    const allDefenders = allEnemies.length > 0 ? allEnemies : [];
-    const distancesToCarrier = allDefenders.map((e: any) => ({
+    // Sort all enemies by distance to carrier
+    const distancesToCarrier = allEnemies.map((e: any) => ({
       entity: e,
       dist: Phaser.Math.Distance.Between(e.x, e.y, ballCarrier.x, ballCarrier.y)
     }));
     distancesToCarrier.sort((a: { dist: number }, b: { dist: number }) => a.dist - b.dist);
     
-    const isPrimaryPresser = distancesToCarrier[0]?.entity === entity;
-    const isSecondaryPresser = distancesToCarrier[1]?.entity === entity;
+    const myRank = distancesToCarrier.findIndex((d: any) => d.entity === entity);
+    const isPrimaryPresser = myRank === 0;
+    const isSecondaryPresser = myRank === 1;
+    const isThirdDefender = myRank === 2;
     
     // Check for tackle backoff (prevents spam after failed tackle)
     const backoffUntil = this.tackleBackoffUntil.get(entity) || 0;
     const isBackingOff = this.scene.time.now < backoffUntil;
     
-    if (isPrimaryPresser && distToCarrier < pressRange) {
-      // Primary presser: close down HARD and attempt tackle
-      
-      // Check angle for tackle (must be approaching from good angle)
+    // === PRIMARY PRESSER: Close down HARD ===
+    if (isPrimaryPresser) {
       const dx = ballCarrier.x - entity.x;
       const dy = ballCarrier.y - entity.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const facingCarrier = Math.abs(dx / dist);  // How much we're facing carrier
       
-      // MORE AGGRESSIVE TACKLING - lower thresholds
-      const tackleRange = TUNING.AI_TACKLE_RANGE;
+      // Tackle check
       const canTackle = !this.isTackleOnCooldown(entity) && 
                         !isBackingOff &&
-                        distToCarrier < tackleRange &&
-                        facingCarrier > TUNING.AI_TACKLE_ANGLE_COS;
+                        distToCarrier < TUNING.AI_TACKLE_RANGE + 10;
       
-      // MUCH MORE WILLING TO TACKLE
-      const willTackle = Math.random() < TUNING.AI_TACKLE_WILLINGNESS * aggression;
-      
-      if (canTackle && willTackle) {
+      const tackleWillingness = isInDangerZone ? 0.95 : TUNING.AI_TACKLE_WILLINGNESS;
+      if (canTackle && Math.random() < tackleWillingness * aggression) {
         return { action: 'tackle', targetEntity: ballCarrier, priority: 10 };
       }
       
-      // Contain behavior: approach DIRECTLY to ball carrier (more aggressive)
-      const goalX = 0;  // Enemy goal is left
-      
-      // Close down directly - less contain, more pressure
-      const targetX = Phaser.Math.Linear(entity.x, ballCarrier.x, 0.85);
-      const targetY = Phaser.Math.Linear(entity.y, ballCarrier.y, 0.85);
-      
+      // Close down DIRECTLY - sprint at the carrier
+      const targetX = ballCarrier.x;
+      const targetY = ballCarrier.y;
       return { action: 'move', targetX, targetY, priority: 9 };
     }
     
-    if (isSecondaryPresser && distToCarrier < TUNING.AI_SECOND_PRESSER_RADIUS) {
-      // Secondary: ALSO close down from a different angle (trap play)
+    // === SECONDARY PRESSER: Trap from different angle ===
+    if (isSecondaryPresser && distToCarrier < pressRange) {
       const dx = ballCarrier.x - entity.x;
       const dy = ballCarrier.y - entity.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const facingCarrier = Math.abs(dx / dist);
       
-      // Secondary presser can also tackle if close enough
+      // Can also tackle if close
       const canTackle = !this.isTackleOnCooldown(entity) && 
                         !isBackingOff &&
-                        distToCarrier < TUNING.AI_TACKLE_RANGE * 1.1 &&
-                        facingCarrier > TUNING.AI_TACKLE_ANGLE_COS;
+                        distToCarrier < TUNING.AI_TACKLE_RANGE + 15;
       
-      if (canTackle && Math.random() < TUNING.AI_TACKLE_WILLINGNESS * aggression * 0.7) {
+      if (canTackle && Math.random() < TUNING.AI_TACKLE_WILLINGNESS * aggression * 0.8) {
         return { action: 'tackle', targetEntity: ballCarrier, priority: 9 };
       }
       
-      // Approach from goal-side (trap angle)
-      const trapAngle = Math.atan2(ballCarrier.y - entity.y, ballCarrier.x - entity.x);
-      const offset = entity.y > ballCarrier.y ? -40 : 40;
-      const targetX = ballCarrier.x - 30;  // Goal-side
-      const targetY = ballCarrier.y + offset;
+      // Approach from goal-side to cut off escape
+      const goalX = 0;
+      const angleToGoal = Math.atan2(this.fieldHeight / 2 - ballCarrier.y, goalX - ballCarrier.x);
+      const trapDist = Math.min(distToCarrier * 0.6, 80);
+      const targetX = ballCarrier.x + Math.cos(angleToGoal) * trapDist;
+      const targetY = ballCarrier.y + Math.sin(angleToGoal) * trapDist;
       
       return { action: 'move', targetX, targetY, priority: 8 };
     }
     
-    // Others: hold shape or mark - but still be ready to press
-    if (config.role === 'defender') {
-      // Block shot line
+    // === THIRD DEFENDER: Block shot line / cover ===
+    if (isThirdDefender || config.role === 'defender') {
       const shotLinePos = this.getBlockShotLine(entity, ballCarrier);
       return { action: 'move', targetX: shotLinePos.x, targetY: shotLinePos.y, priority: 7 };
     }
     
-    // Return to defensive formation
-    const lineOfEngagement = this.getLineOfEngagement(false);
-    const homePos = this.getFormationPosition(entity, config.role, slotIndex, false, ball);
-    homePos.x = Math.min(homePos.x, this.fieldWidth * lineOfEngagement);
+    // === OTHERS: Mark attackers or cover passing lanes ===
+    // Find nearest unmarked attacker
+    const unmarkedAttacker = this.findNearestUnmarkedAttacker(entity, playerTeamAttackers, allEnemies, ballCarrier);
+    if (unmarkedAttacker) {
+      // Goal-side marking position
+      const goalX = 0;
+      const markX = Phaser.Math.Linear(unmarkedAttacker.x, goalX, 0.25);
+      const markY = unmarkedAttacker.y;
+      return { action: 'move', targetX: markX, targetY: markY, priority: 6 };
+    }
     
-    return { action: 'move', targetX: homePos.x, targetY: homePos.y, priority: 5 };
+    // Cover passing lane
+    const coverPos = this.getCoverPassingLane(entity, ballCarrier, playerTeamAttackers);
+    return { action: 'move', targetX: coverPos.x, targetY: coverPos.y, priority: 5 };
+  }
+  
+  /**
+   * Find the nearest attacker not being marked by another defender
+   */
+  private findNearestUnmarkedAttacker(entity: any, attackers: any[], defenders: any[], carrier: any): any {
+    // Simple heuristic: each defender marks the nearest attacker not already being marked by a closer defender
+    const otherDefenders = defenders.filter(d => d !== entity);
+    
+    let bestAttacker = null;
+    let bestDist = Infinity;
+    
+    for (const attacker of attackers) {
+      if (attacker === carrier) continue;  // Carrier is being pressed, not marked
+      
+      const distToAttacker = Phaser.Math.Distance.Between(entity.x, entity.y, attacker.x, attacker.y);
+      
+      // Check if a closer defender is already on this attacker
+      let isBeingMarkedByCloser = false;
+      for (const defender of otherDefenders) {
+        const defenderDist = Phaser.Math.Distance.Between(defender.x, defender.y, attacker.x, attacker.y);
+        if (defenderDist < distToAttacker - 30) {
+          isBeingMarkedByCloser = true;
+          break;
+        }
+      }
+      
+      if (!isBeingMarkedByCloser && distToAttacker < bestDist) {
+        bestDist = distToAttacker;
+        bestAttacker = attacker;
+      }
+    }
+    
+    return bestAttacker;
   }
   
   /**
    * Get position to block shot line between carrier and goal
+   * More aggressive positioning in danger zone
    */
   private getBlockShotLine(entity: any, carrier: any): { x: number; y: number } {
-    const goalX = 0;  // Enemy goal
+    const goalX = 30;  // Enemy goal (slightly inside)
     const goalY = this.fieldHeight / 2;
     
-    // Stand on line between carrier and goal, closer to carrier
-    const t = 0.35;  // Closer to carrier
+    // Calculate distance to goal - closer = more aggressive blocking
+    const carrierDistToGoal = Phaser.Math.Distance.Between(carrier.x, carrier.y, goalX, goalY);
+    
+    // In danger zone (< 350px from goal), position very close to goal line
+    // Outside danger zone, position closer to carrier
+    let t: number;
+    if (carrierDistToGoal < 200) {
+      t = 0.15;  // Very close to goal - last line of defense
+    } else if (carrierDistToGoal < 350) {
+      t = 0.25;  // Close to goal
+    } else {
+      t = 0.4;  // Normal position - closer to carrier
+    }
+    
     const x = Phaser.Math.Linear(carrier.x, goalX, t);
     const y = Phaser.Math.Linear(carrier.y, goalY, t);
     
-    return { x: Phaser.Math.Clamp(x, 60, this.fieldWidth - 60), y };
+    // Clamp to stay in front of goal
+    return { 
+      x: Phaser.Math.Clamp(x, 50, this.fieldWidth - 100), 
+      y: Phaser.Math.Clamp(y, 150, this.fieldHeight - 150)
+    };
   }
   
   // Helper methods
@@ -1275,37 +1434,78 @@ export class AISystem {
     };
   }
   
-  // Cover the most dangerous passing lane
-  private getCoverPassingLane(entity: any, ballCarrier: any, enemies: any[]): { x: number; y: number } {
-    const forwardEnemies = enemies.filter(e => e.x < ballCarrier.x);
+  // Cover the most dangerous passing lane (when defending against player team)
+  private getCoverPassingLane(entity: any, ballCarrier: any, attackers: any[]): { x: number; y: number } {
+    const goalX = 0;  // Enemy goal (we're defending)
+    const goalY = this.fieldHeight / 2;
     
-    if (forwardEnemies.length === 0) {
-      return { x: ballCarrier.x - 100, y: this.fieldHeight / 2 };
+    // Find attackers in dangerous positions (ahead of carrier or in good angle)
+    const dangerousAttackers = attackers.filter(a => {
+      if (a === ballCarrier) return false;
+      const dist = Phaser.Math.Distance.Between(ballCarrier.x, ballCarrier.y, a.x, a.y);
+      return dist < 300;  // Within passing range
+    });
+    
+    if (dangerousAttackers.length === 0) {
+      // No dangerous attackers - position between carrier and goal
+      return {
+        x: Phaser.Math.Linear(ballCarrier.x, goalX, 0.4),
+        y: Phaser.Math.Linear(ballCarrier.y, goalY, 0.3)
+      };
     }
     
-    const nearest = forwardEnemies.reduce((best, e) => {
-      const dist = Phaser.Math.Distance.Between(ballCarrier.x, ballCarrier.y, e.x, e.y);
-      return dist < best.dist ? { entity: e, dist } : best;
-    }, { entity: forwardEnemies[0], dist: Infinity });
+    // Find most dangerous - closest to goal with good angle
+    const mostDangerous = dangerousAttackers.reduce((best, a) => {
+      const distToGoal = Phaser.Math.Distance.Between(a.x, a.y, goalX, goalY);
+      const score = 1000 - distToGoal;  // Lower distance to goal = more dangerous
+      return score > best.score ? { entity: a, score } : best;
+    }, { entity: dangerousAttackers[0], score: -Infinity });
     
-    // Position between carrier and target
+    // Position on the passing lane between carrier and dangerous attacker
+    const midX = (ballCarrier.x + mostDangerous.entity.x) / 2;
+    const midY = (ballCarrier.y + mostDangerous.entity.y) / 2;
+    
+    // Offset toward goal slightly
     return {
-      x: (ballCarrier.x + nearest.entity.x) / 2,
-      y: (ballCarrier.y + nearest.entity.y) / 2
+      x: Phaser.Math.Linear(midX, goalX, 0.2),
+      y: midY
     };
   }
   
-  // Last defender position - track goal line
+  /**
+   * Last defender / goalkeeper-lite position
+   * Tracks ball and threat, stays on shot line, protects goal
+   */
   private getLastManPosition(entity: any, threat: any): { x: number; y: number } {
-    const goalX = 10;
+    const goalX = 40;  // Near goal line
     const goalY = this.fieldHeight / 2;
     
-    const coverX = Math.max(50, Math.min(threat.x - 90, 160));
-    const coverY = goalY + (threat.y - goalY) * 0.35;
+    // Get ball position for better tracking
+    const ball = this.scene.registry.get('ball');
+    const ballX = ball?.x || threat.x;
+    const ballY = ball?.y || threat.y;
+    
+    // Calculate shot line from ball to goal center
+    const angleToGoal = Math.atan2(goalY - ballY, goalX - ballX);
+    
+    // Position on the shot line, closer to goal when threat is close
+    const distToThreat = Phaser.Math.Distance.Between(threat.x, threat.y, goalX, goalY);
+    let coverDist: number;
+    
+    if (distToThreat < 200) {
+      coverDist = 30;  // Very close to goal
+    } else if (distToThreat < 350) {
+      coverDist = 60;  // Near goal
+    } else {
+      coverDist = 100; // Can come out a bit
+    }
+    
+    const coverX = goalX + Math.cos(angleToGoal + Math.PI) * coverDist;
+    const coverY = goalY + (ballY - goalY) * 0.5;  // Track ball Y
     
     return {
-      x: Phaser.Math.Clamp(coverX, 40, 200),
-      y: Phaser.Math.Clamp(coverY, 240, 460)
+      x: Phaser.Math.Clamp(coverX, 35, 180),
+      y: Phaser.Math.Clamp(coverY, 200, this.fieldHeight - 200)
     };
   }
   
