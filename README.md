@@ -64,10 +64,15 @@ The production build will be in the `dist/` folder.
 | Tackle | Q |
 | Dodge | Shift |
 | Aim | Mouse (or auto-aim toward goal if keyboard only) |
+| **Build Screen** | **TAB** (view stats, upgrades, synergies) |
+| **Call Play: PRESS** | **1** (aggressive pressing for 8s) |
+| **Call Play: HOLD** | **2** (safe possession for 8s) |
+| **Call Play: COUNTER** | **3** (sit deep, burst on turnover) |
 | Pause | Escape or P |
 | Toggle Controls | H (in-game) |
 | Goal Debug | G (shows goal sensor outlines) |
 | Debug Display | F1 (shows possession, objective, AI state, passes) |
+| Upgrade Debug | F8 (shows active upgrades, stats, procs) |
 
 > **Tip**: Press R to call for pass! Teammates will prioritize passing to you when the lane is clear.
 
@@ -307,6 +312,104 @@ MIT License - feel free to use this project as a base for your own games!
 - Field hockey for being an awesome sport
 
 ## 📋 CHANGELOG
+
+### v1.5.0 - Upgrades That Work & Phase 1 Features
+
+#### A) Upgrade System Overhaul - GUARANTEED WORKING UPGRADES
+- **Validation Audit**: At boot, all upgrades are validated to ensure they have real effects
+- Every upgrade must have at least one: stat modifier OR event hook with callback
+- Invalid upgrades are logged and excluded from draft pools
+- `UpgradeSystem.isUpgradeValid(id)` can check any upgrade
+- Console logs `[UPGRADE_AUDIT]` with validation results
+
+#### B) Single Source of Truth for Stats
+- `UpgradeSystem.getModifiedStat(base, statName)` is THE way to get final stats
+- Player, Ball, and AI all read from UpgradeSystem
+- Stat modifiers stack: base stat * (1 + sum of % modifiers / 100)
+- Temporary buffs tracked separately with expiration times
+- `getFinalStats(baseStats)` returns all stats after modifiers
+
+#### C) Proc Feedback System
+- `procUpgrade(id, intensity)` called when upgrades trigger
+- Visual toast: "PROC: <name>" with upgrade icon
+- Proc counts tracked per moment
+- `getTopProcs(5)` returns most-triggered upgrades
+- `getRecentProcs()` returns last 10 procs with timestamps
+
+#### D) Build Screen (TAB)
+- Press TAB to view full build info mid-game
+- Shows: character, trait, downside, final stats
+- Cup Run score and current moment objective
+- All picked upgrades with proc counts
+- Synergy progress (X/5 pips for each)
+- Top procs list
+- Active curse details (if Comeback Curses triggered)
+
+#### E) Synergy Bonuses - REAL EFFECTS
+- Collecting 3 upgrades with same tag = Tier 1 synergy
+- Collecting 5 upgrades = Tier 2 synergy (stronger bonuses)
+- Synergies apply REAL stat modifiers:
+  - PRESS: +20/40% tackle, +10/20% speed
+  - TRIANGLE: +25/50% pass power, +15/30% control, 2x Give-and-Go at T2
+  - DRAG_FLICK: +25/50% shot power
+  - REBOUND: +30/60% rebound speed
+  - TRICKSTER: +20/40% dodge, +15/30% control
+  - SWEEPER: +20/40% tackle range
+- Visual popup when synergy activates
+- HUD shows active synergies with tier indicator
+
+#### F) Call Plays (1/2/3 Keys)
+- Press 1 = PRESS: Teammates close down aggressively for 8s
+- Press 2 = HOLD: Safer passes, wider shape for 8s
+- Press 3 = COUNTER: Sit deep, burst forward on turnovers for 8s
+- 20 second cooldown between plays
+- Visual banner when play is called
+- HUD shows active play with countdown timer
+- AI aggression modified by active play
+
+#### G) Give-and-Go Bonus
+- Pass to teammate, receive return pass within 3.5s
+- Activates 2 second buff: +15% speed, +20% control, +15% shot power
+- "GIVE & GO!" popup with icon
+- TRIANGLE Tier 2 synergy DOUBLES this buff
+
+#### H) Active Buffs HUD
+- New HUD row showing active buffs
+- Each buff shows icon + countdown ring
+- Color-coded by source: purple=upgrade, orange=synergy, blue=play, green=giveAndGo
+
+#### I) How to Add New Upgrades (Guaranteed Functional)
+
+1. Add upgrade to `/src/data/upgrades.ts`:
+```typescript
+{
+  id: 'myUpgrade',
+  name: 'My Upgrade',
+  description: 'Does something cool',
+  rarity: 'rare',
+  synergies: ['speedster'],
+  hooks: ['onShot'],  // When this triggers
+  modifiers: [{ stat: 'shotPower', value: 25, isPercent: true }],  // +25% shot power
+  effectId: 'myEffect',  // Must match callback in UpgradeSystem
+  icon: '⚡'
+}
+```
+
+2. If using hooks (not just modifiers), add callback in `UpgradeSystem.getEffectCallback()`:
+```typescript
+myEffect: (ctx) => {
+  this.addTempBuff('myEffect', 'speed', 20, 2000, 'upgrade');
+  this.procUpgrade(upgradeId, 1);  // Show proc feedback
+}
+```
+
+3. **Validation**: On boot, audit will verify your upgrade has either:
+   - At least one modifier, OR
+   - A hook with a real callback
+
+4. **Testing**: Pick your upgrade in-game, press F8 to see it in debug overlay
+
+---
 
 ### v1.3.0 - Gameplay Impact & AI Challenge Update
 

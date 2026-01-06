@@ -75,6 +75,10 @@ export class AISystem {
   private difficultyMultiplier: number = 1.0;
   private momentNumber: number = 1;
   
+  // Active play calling (1/2/3 keys)
+  private activePlay: 'press' | 'hold' | 'counter' | null = null;
+  private playExpiresAt: number = 0;
+  
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
   }
@@ -85,6 +89,23 @@ export class AISystem {
    */
   setObjective(objective: ObjectiveDescriptor): void {
     this.currentObjective = objective;
+  }
+  
+  /**
+   * Set active play (called by player using 1/2/3 keys)
+   * Affects teammate AI behavior for duration
+   */
+  setActivePlay(play: 'press' | 'hold' | 'counter'): void {
+    this.activePlay = play;
+    this.playExpiresAt = this.scene.time.now + 8000;
+    console.log(`[AI] Play set: ${play}`);
+  }
+  
+  getActivePlay(): 'press' | 'hold' | 'counter' | null {
+    if (this.scene.time.now > this.playExpiresAt) {
+      this.activePlay = null;
+    }
+    return this.activePlay;
   }
   
   /**
@@ -117,6 +138,23 @@ export class AISystem {
       case 'survive':
         adjustment = -0.1;
         break;
+    }
+    
+    // Apply play calling effects (for teammates)
+    const play = this.getActivePlay();
+    if (play) {
+      switch (play) {
+        case 'press':
+          adjustment += 0.3;  // Much more aggressive
+          break;
+        case 'hold':
+          adjustment -= 0.2;  // More conservative
+          break;
+        case 'counter':
+          // Normal aggression but different behavior (sit deep, burst on turnover)
+          adjustment -= 0.1;
+          break;
+      }
     }
     
     // Apply difficulty multiplier
