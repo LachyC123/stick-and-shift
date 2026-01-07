@@ -254,14 +254,23 @@ export class EnemyAI extends Phaser.Physics.Arcade.Sprite {
     
     const angle = Math.atan2(targetY - this.y, targetX - this.x);
     
-    // Add some inaccuracy based on skill
-    const inaccuracy = (1 - this.aiConfig.skill) * 0.3;
+    // Add some inaccuracy based on skill (less at close range)
+    const distToTarget = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
+    const closeRange = distToTarget < 150;
+    const inaccuracy = closeRange 
+      ? (1 - this.aiConfig.skill) * 0.15  // More accurate at close range
+      : (1 - this.aiConfig.skill) * 0.3;
     const finalAngle = angle + (Math.random() - 0.5) * inaccuracy;
     
     this.hasBall = false;
     
+    // Use tap shot power for close range, full power otherwise
+    const power = closeRange ? this.shotPower * 0.85 : this.shotPower;
+    
+    console.log(`[AI SHOOT] range=${closeRange ? 'close' : 'normal'} power=${Math.round(power)} angle=${finalAngle.toFixed(2)}`);
+    
     if (this.onShoot) {
-      this.onShoot(this.shotPower, finalAngle);
+      this.onShoot(power, finalAngle);
     }
   }
   

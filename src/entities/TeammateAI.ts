@@ -200,12 +200,23 @@ export class TeammateAI extends Phaser.Physics.Arcade.Sprite {
     if (!this.hasBall) return;
     
     const angle = Math.atan2(targetY - this.y, targetX - this.x);
-    const power = 250 + this.aiConfig.skill * 100;
+    
+    // Stronger shot power for teammates + close range detection
+    const distToTarget = Phaser.Math.Distance.Between(this.x, this.y, targetX, targetY);
+    const closeRange = distToTarget < 150;
+    const basePower = 1000 + this.aiConfig.skill * 150;  // Much stronger
+    const power = closeRange ? basePower * 0.9 : basePower;
+    
+    // Less inaccuracy at close range
+    const inaccuracy = closeRange ? 0.1 : 0.2;
+    const finalAngle = angle + (Math.random() - 0.5) * inaccuracy;
     
     this.hasBall = false;
     
+    console.log(`[TEAMMATE SHOOT] closeRange=${closeRange} power=${Math.round(power)}`);
+    
     if (this.onShoot) {
-      this.onShoot(power, angle);
+      this.onShoot(power, finalAngle);
     }
   }
   

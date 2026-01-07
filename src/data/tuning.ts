@@ -6,19 +6,23 @@
 // BALL PHYSICS
 // ============================================================
 
-/** Base pass speed in pixels/sec */
-export const PASS_SPEED_BASE = 950;
+/** Base pass speed in pixels/sec - FAST but with quick friction */
+export const PASS_SPEED_BASE = 750;
 /** Additional speed per passPower stat point */
-export const PASS_SPEED_SCALE = 20;
+export const PASS_SPEED_SCALE = 15;
 /** Maximum pass speed */
-export const PASS_SPEED_MAX = 1400;
+export const PASS_SPEED_MAX = 1000;
+/** Pass-specific drag (more friction than shots for "receiving" feel) */
+export const PASS_DRAG = 0.975;
 
-/** Base shot speed in pixels/sec */
+/** Base shot speed in pixels/sec - HARDER/FASTER than pass */
 export const SHOT_SPEED_BASE = 1200;
 /** Additional speed per shotPower stat point */
-export const SHOT_SPEED_SCALE = 25;
+export const SHOT_SPEED_SCALE = 30;
 /** Maximum shot speed */
-export const SHOT_SPEED_MAX = 1750;
+export const SHOT_SPEED_MAX = 1800;
+/** Shot-specific drag (less friction for power feel) */
+export const SHOT_DRAG = 0.992;
 
 /** Ball drag per frame (0.99 = very little drag, 0.95 = heavy drag) */
 export const BALL_DRAG = 0.990;
@@ -62,7 +66,7 @@ export const DODGE_DISTANCE_SCALE = 8;
 export const DODGE_DURATION = 180;
 
 // ============================================================
-// TACKLE IMPACT
+// TACKLE IMPACT (MORE PUNISHING)
 // ============================================================
 
 /** Tackle lunge speed in pixels/sec */
@@ -72,22 +76,31 @@ export const TACKLE_DISTANCE_BASE = 60;
 /** Additional tackle distance per tackle stat */
 export const TACKLE_DISTANCE_SCALE = 6;
 /** Tackle success base chance (0-1) */
-export const TACKLE_SUCCESS_BASE = 0.60;
+export const TACKLE_SUCCESS_BASE = 0.65;
 /** Additional success per tackle stat point */
 export const TACKLE_SUCCESS_SCALE = 0.05;
 
-/** Knockback applied to tackled player (no ball) */
-export const TACKLE_KNOCKBACK = 340;
-/** Knockback applied to tackled player (has ball - stronger) */
-export const TACKLE_KNOCKBACK_CARRIER = 480;
-/** Stun duration after being tackled */
-export const TACKLE_STUN_MS = 220;
-/** Hitstop duration (micro-freeze for impact) */
-export const TACKLE_HITSTOP_MS = 55;
-/** Camera shake on tackle hit */
-export const TACKLE_SHAKE = 0.012;
-/** Tackle shake duration */
-export const TACKLE_SHAKE_DURATION = 120;
+/** Knockback applied to tackled player (no ball) - INCREASED */
+export const TACKLE_KNOCKBACK = 420;
+/** Knockback applied to tackled player (has ball - stronger) - INCREASED */
+export const TACKLE_KNOCKBACK_CARRIER = 580;
+/** Stun duration after being tackled - INCREASED for punishment */
+export const TACKLE_STUN_MS = 450;
+/** Hitstop duration (micro-freeze for impact) - LONGER for feel */
+export const TACKLE_HITSTOP_MS = 70;
+/** Camera shake on tackle hit - STRONGER */
+export const TACKLE_SHAKE = 0.018;
+/** Tackle shake duration - LONGER */
+export const TACKLE_SHAKE_DURATION = 180;
+
+/** Health damage when tackled */
+export const TACKLE_HEALTH_DAMAGE = 22;
+/** Stamina loss when tackled */
+export const TACKLE_STAMINA_LOSS = 30;
+/** Ball scatter distance on tackle (how far ball pops) */
+export const TACKLE_BALL_SCATTER = 45;
+/** Recovery invulnerability time (can't be chain-tackled) */
+export const TACKLE_RECOVERY_INVULN_MS = 600;
 
 // ============================================================
 // CHARGED SHOT
@@ -103,13 +116,28 @@ export const CHARGE_POWER_MULT_MIN = 1.0;
 export const CHARGE_POWER_MULT_MAX = 1.35;
 
 // ============================================================
-// COOLDOWNS (in milliseconds)
+// COOLDOWNS (in milliseconds) - DIFFERENT FOR PASS vs SHOOT
 // ============================================================
 
-export const COOLDOWN_SHOOT = 180;
-export const COOLDOWN_PASS = 180;
+/** Shot cooldown - LONGER (shooting is powerful, needs recovery) */
+export const COOLDOWN_SHOOT = 500;
+/** Pass cooldown - SHORTER (quick passes feel snappy) */
+export const COOLDOWN_PASS = 200;
 export const COOLDOWN_TACKLE = 600;
 export const COOLDOWN_DODGE = 850;
+
+// ============================================================
+// AI FINISHING (PART 1 FIX)
+// ============================================================
+
+/** Time AI can be in D with ball before forced action (ms) */
+export const AI_FINISH_STALL_TIMEOUT = 700;
+/** Distance from goal line that triggers finish logic */
+export const AI_FINISH_GOAL_LINE_DIST = 60;
+/** Very close range - immediate shot */
+export const AI_FINISH_CLOSE_RANGE = 100;
+/** AI tap shot power (instant, no charge needed) */
+export const AI_TAP_SHOT_POWER = 1000;
 
 // ============================================================
 // AI TUNING (AGGRESSIVE SETTINGS FOR CHALLENGING GAMEPLAY)

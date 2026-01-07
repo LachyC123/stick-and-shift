@@ -24,6 +24,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   public isCharging: boolean = false;
   public isHitstop: boolean = false;
   public isCallingForPass: boolean = false;
+  public isInvulnerable: boolean = false;  // Recovery invulnerability (Part 2)
   private callingForPassUntil: number = 0;
   
   // HEALTH SYSTEM (Part C)
@@ -202,38 +203,56 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       this.callingForPassUntil = 0;
     }
     
-    // === CHARGED SHOT ===
-    // Start charging on press
-    if (input.shoot && this.hasBall && this.shootCooldown <= 0) {
-      this.startCharge();
-    }
+    // ========================================
+    // SIMPLIFIED CONTROLS (Part 3)
+    // ========================================
+    // With ball: TAP action = PASS, HOLD action = SHOOT
+    // Without ball: TAP action = TACKLE
     
-    // Release shot on key/mouse up
-    if (this.isCharging) {
-      if (input.shootReleased || (!input.shootHeld && !input.mouseDown)) {
-        this.releaseChargedShot(input.aimAngle);
-      } else if (!this.hasBall) {
-        // Lost ball while charging - cancel
-        this.cancelCharge();
+    if (this.hasBall) {
+      // === WITH BALL: SHOOT (hold) or PASS (tap) ===
+      
+      // Start charging when action button pressed
+      if ((input.shoot || input.mouseDown) && this.shootCooldown <= 0 && !this.isCharging) {
+        this.startCharge();
+      }
+      
+      // While charging, check for release
+      if (this.isCharging) {
+        const chargeTime = this.scene.time.now - this.chargeStartTime;
+        
+        // If button released quickly (< 150ms) = PASS
+        // If button held longer = SHOOT on release
+        if (input.shootReleased || (!input.shootHeld && !input.mouseDown)) {
+          if (chargeTime < 150 && this.passCooldown <= 0) {
+            // TAP = Quick pass
+            this.cancelCharge();
+            this.tryPass(input.aimAngle);
+          } else {
+            // HOLD = Charged shot
+            this.releaseChargedShot(input.aimAngle);
+          }
+        } else if (!this.hasBall) {
+          // Lost ball while charging - cancel
+          this.cancelCharge();
+        }
+      }
+      
+      // Legacy pass button still works
+      if (input.pass && this.passCooldown <= 0 && !this.isCharging) {
+        this.tryPass(input.aimAngle);
+      }
+      
+    } else {
+      // === WITHOUT BALL: TACKLE (tap) ===
+      
+      // Any action button = tackle
+      if ((input.shoot || input.tackle) && this.tackleCooldown <= 0) {
+        this.tackle();
       }
     }
     
-    // Quick tap shot (instant release)
-    if (input.shoot && !this.isCharging && this.hasBall && this.shootCooldown <= 0) {
-      // Already handled above - starts charge
-    }
-    
-    // === PASS ===
-    if (input.pass && this.passCooldown <= 0) {
-      this.tryPass(input.aimAngle);
-    }
-    
-    // === TACKLE ===
-    if (input.tackle && !this.hasBall && this.tackleCooldown <= 0) {
-      this.tackle();
-    }
-    
-    // === DODGE ===
+    // === DODGE (always available) ===
     if (input.dodge && this.dodgeCooldown <= 0 && this.stamina >= 20) {
       this.dodge(input.moveX || Math.cos(input.aimAngle), input.moveY || Math.sin(input.aimAngle));
     }
@@ -339,7 +358,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private shoot(power: number, angle: number, isCharged: boolean = false): void {
     this.isShooting = true;
     this.hasBall = false;
-    this.shootCooldown = TUNING.COOLDOWN_SHOOT;
+    this.shootCooldown = TUNING.COOLDOWN_SHOOT;  // LONGER cooldown than pass
     
     this.upgradeSystem?.emitEvent('shot', {
       player: this,
@@ -350,20 +369,33 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     
     this.onShoot?.(power, angle);
     
-    // Visual feedback
+    // === SHOT VISUAL: Powerful, big backswing, impact feel ===
     this.playStickSwing(angle);
     this.playMuzzleFlash(angle, true);
     
-    // Stronger shake for charged shots
-    const shakeIntensity = isCharged ? TUNING.CAMERA_SHAKE_SHOT * 1.5 : TUNING.CAMERA_SHAKE_SHOT;
-    this.scene.cameras.main.shake(TUNING.CAMERA_SHAKE_SHOT_DURATION, shakeIntensity);
+    // Strong camera shake (shot is powerful)
+    const shakeIntensity = isCharged ? 0.012 : 0.008;
+    const shakeDuration = isCharged ? 150 : 100;
+    this.scene.cameras.main.shake(shakeDuration, shakeIntensity);
     
-    // Body animation
+    // Micro hitstop for impact feel on charged shots
+    if (isCharged) {
+      this.applyHitstop(40);
+      // Flash bright for "CRACK!" moment
+      this.setTint(0xf1c40f);
+      this.scene.time.delayedCall(60, () => this.clearTint());
+    } else {
+      // Regular shot - orange flash
+      this.setTint(0xff6600);
+      this.scene.time.delayedCall(50, () => this.clearTint());
+    }
+    
+    // Big body animation (shot has windup)
     this.scene.tweens.add({
       targets: this,
-      scaleX: isCharged ? 1.22 : 1.15,
-      scaleY: isCharged ? 0.78 : 0.85,
-      duration: 60,
+      scaleX: isCharged ? 1.28 : 1.18,
+      scaleY: isCharged ? 0.72 : 0.82,
+      duration: isCharged ? 80 : 60,
       yoyo: true,
       ease: 'Power2',
       onComplete: () => {
@@ -389,7 +421,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   
   private performPass(angle: number): void {
     this.hasBall = false;
-    this.passCooldown = TUNING.COOLDOWN_PASS;
+    this.passCooldown = TUNING.COOLDOWN_PASS;  // SHORT cooldown
     
     const passPower = this.getModifiedStat('passPower');
     const speed = Math.min(
@@ -404,21 +436,27 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       time: this.scene.time.now
     });
     
+    // Pass callback with "pass" type for different ball physics
     this.onPass?.(angle, speed);
     
-    // Visual
+    // === PASS VISUAL: Quick, snappy, thin line indicator ===
     this.playPassLine(angle);
     
-    // Small camera nudge
-    this.scene.cameras.main.shake(TUNING.CAMERA_SHAKE_PASS_DURATION, TUNING.CAMERA_SHAKE_PASS);
+    // Minimal camera nudge (pass is crisp, not powerful)
+    this.scene.cameras.main.shake(30, 0.002);
     
+    // Quick small animation (pass is fast release)
     this.scene.tweens.add({
       targets: this,
-      scaleX: 1.1,
-      scaleY: 0.9,
-      duration: 45,
+      scaleX: 1.05,
+      scaleY: 0.95,
+      duration: 35,  // Faster than shot
       yoyo: true
     });
+    
+    // Flash subtle blue for pass
+    this.setTint(0x3498db);
+    this.scene.time.delayedCall(80, () => this.clearTint());
   }
   
   // === TACKLE ===
