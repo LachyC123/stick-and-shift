@@ -9,6 +9,7 @@ import { Ball } from '../entities/Ball';
 import { TeammateAI } from '../entities/TeammateAI';
 import { EnemyAI } from '../entities/EnemyAI';
 import { EnemyGoalkeeper } from '../entities/EnemyGoalkeeper';
+import { Goalkeeper } from '../entities/Goalkeeper';
 import { InputSystem } from '../systems/InputSystem';
 import { UpgradeSystem } from '../systems/UpgradeSystem';
 import { MomentSystem } from '../systems/MomentSystem';
@@ -37,6 +38,7 @@ export class RunScene extends Phaser.Scene {
   private teammates: TeammateAI[] = [];
   private enemies: EnemyAI[] = [];
   private enemyGoalkeeper?: EnemyGoalkeeper;
+  private playerGoalkeeper?: Goalkeeper;  // Part 4: Player's GK
   
   // Systems
   private inputSystem!: InputSystem;
@@ -237,13 +239,19 @@ export class RunScene extends Phaser.Scene {
   private updateGKStatusMarker(): void {
     if (!this.gkStatusMarker) return;
     
-    if (this.enemyGoalkeeper && TUNING.GK_ENABLED) {
-      const gkInfo = this.enemyGoalkeeper.getDebugInfo();
-      const state = this.enemyGoalkeeper.getStateString();
-      this.gkStatusMarker.setText(`🧤 ENEMY GK: ON (${state}) Saves:${gkInfo.saves}`);
+    if (TUNING.GK_ENABLED) {
+      const enemyGkInfo = this.enemyGoalkeeper?.getDebugInfo() || { saves: 0, lunges: 0 };
+      const enemyState = this.enemyGoalkeeper?.getStateString() || 'N/A';
+      const playerGkState = this.playerGoalkeeper?.getStateString() || 'N/A';
+      const playerGkSaves = this.playerGoalkeeper?.saveCount || 0;
+      
+      this.gkStatusMarker.setText(
+        `🧤 PLAYER GK: ON (${playerGkState}) Saves:${playerGkSaves}\n` +
+        `🧤 ENEMY GK: ON (${enemyState}) Saves:${enemyGkInfo.saves}`
+      );
       this.gkStatusMarker.setColor('#00ff00');
     } else if (!TUNING.GK_ENABLED) {
-      this.gkStatusMarker.setText('ENEMY GK: DISABLED');
+      this.gkStatusMarker.setText('GKs: DISABLED');
       this.gkStatusMarker.setColor('#ff6600');
     } else {
       this.gkStatusMarker.setText('ENEMY GK: OFF');
@@ -761,8 +769,10 @@ export class RunScene extends Phaser.Scene {
     // Get GK info if available
     const gkInfo = this.enemyGoalkeeper?.getDebugInfo() || { saves: 0, lunges: 0, isLunging: false };
     const gkState = this.enemyGoalkeeper?.getStateString() || 'N/A';
+    const playerGkState = this.playerGoalkeeper?.getStateString() || 'N/A';
+    const playerGkSaves = this.playerGoalkeeper?.saveCount || 0;
     
-    // Draw GK_BOX if GK exists
+    // Draw ENEMY GK_BOX (right side)
     if (this.enemyGoalkeeper) {
       const gkBox = this.enemyGoalkeeper.getGKBox();
       
@@ -788,11 +798,47 @@ export class RunScene extends Phaser.Scene {
       this.aiDebugGraphics!.lineStyle(2, 0xff9900, 0.8);
       this.aiDebugGraphics!.strokeCircle(this.enemyGoalkeeper.x, this.enemyGoalkeeper.y, 32);
       
-      // Label "GK_BOX"
-      const gkLabel = this.add.text(gkBox.minX + 5, gkBox.minY - 15, 'GK_BOX', {
+      // Label "ENEMY GK_BOX"
+      const gkLabel = this.add.text(gkBox.minX + 5, gkBox.minY - 15, 'ENEMY GK_BOX', {
         fontFamily: 'monospace',
         fontSize: '10px',
         color: '#00ffff'
+      });
+      gkLabel.setDepth(300);
+      this.aiDebugLabels.push(gkLabel);
+    }
+    
+    // Draw PLAYER GK_BOX (left side) - Part 4
+    if (this.playerGoalkeeper) {
+      const gkBox = this.playerGoalkeeper.getGKBox();
+      
+      // Draw GK_BOX rectangle (blue)
+      this.aiDebugGraphics!.lineStyle(2, 0x3498db, 0.6);
+      this.aiDebugGraphics!.strokeRect(
+        gkBox.minX, 
+        gkBox.topY, 
+        gkBox.maxX - gkBox.minX, 
+        gkBox.bottomY - gkBox.topY
+      );
+      
+      // Fill with semi-transparent
+      this.aiDebugGraphics!.fillStyle(0x3498db, 0.1);
+      this.aiDebugGraphics!.fillRect(
+        gkBox.minX, 
+        gkBox.topY, 
+        gkBox.maxX - gkBox.minX, 
+        gkBox.bottomY - gkBox.topY
+      );
+      
+      // Draw GK position with save radius
+      this.aiDebugGraphics!.lineStyle(2, 0x3498db, 0.8);
+      this.aiDebugGraphics!.strokeCircle(this.playerGoalkeeper.x, this.playerGoalkeeper.y, 32);
+      
+      // Label "PLAYER GK_BOX"
+      const gkLabel = this.add.text(gkBox.maxX - 80, gkBox.topY - 15, 'PLAYER GK_BOX', {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: '#3498db'
       });
       gkLabel.setDepth(300);
       this.aiDebugLabels.push(gkLabel);
@@ -816,7 +862,12 @@ export class RunScene extends Phaser.Scene {
       primaryPresser ? `Range: ${TUNING.AI_TACKLE_RANGE}px` : '',
       primaryPresser ? `CD: ${TUNING.AI_TACKLE_COOLDOWN_MS}ms` : '',
       '',
-      '--- ENEMY GOALKEEPER ---',
+      '--- PLAYER GOALKEEPER (Left) ---',
+      `State: ${playerGkState}`,
+      `Saves: ${playerGkSaves}`,
+      `Position: (${Math.round(this.playerGoalkeeper?.x || 0)}, ${Math.round(this.playerGoalkeeper?.y || 0)})`,
+      '',
+      '--- ENEMY GOALKEEPER (Right) ---',
       `State: ${gkState}`,
       `Saves: ${gkInfo.saves}`,
       `Lunges: ${gkInfo.lunges}`,
@@ -1440,14 +1491,15 @@ export class RunScene extends Phaser.Scene {
   private createEnemyGoalkeeper(): void {
     if (!TUNING.GK_ENABLED) return;
     
-    // Destroy old GK if exists
+    // Destroy old GKs if exist
     this.enemyGoalkeeper?.destroy();
+    this.playerGoalkeeper?.destroy();
     
-    // Create new GK
+    // Create ENEMY GK (defends right goal where player shoots)
     this.enemyGoalkeeper = new EnemyGoalkeeper(this, this.fieldWidth, this.fieldHeight);
     this.enemyGoalkeeper.setBall(this.ball);
     
-    // Setup collision with ball
+    // Setup collision with ball for enemy GK
     this.physics.add.overlap(this.enemyGoalkeeper, this.ball, () => {
       if (this.ball.isLoose && this.ball.getSpeed() > 80) {
         this.enemyGoalkeeper!.onBallContact(this.ball);
@@ -1455,6 +1507,19 @@ export class RunScene extends Phaser.Scene {
     });
     
     console.log('[GK] Enemy goalkeeper created');
+    
+    // === PART 4: Create PLAYER GK (defends left goal where enemy shoots) ===
+    this.playerGoalkeeper = new Goalkeeper(this, this.fieldWidth, this.fieldHeight, 'player');
+    this.playerGoalkeeper.setBall(this.ball);
+    
+    // Setup collision with ball for player GK
+    this.physics.add.overlap(this.playerGoalkeeper, this.ball, () => {
+      if (this.ball.isLoose && this.ball.getSpeed() > 80) {
+        this.playerGoalkeeper!.onBallContact(this.ball);
+      }
+    });
+    
+    console.log('[GK] Player goalkeeper created');
   }
   
   private createTeammates(count: number): void {
@@ -1608,6 +1673,9 @@ export class RunScene extends Phaser.Scene {
     this.enemies.forEach(e => {
       e.setReferences(this.player, this.teammates, this.enemies, this.ball);
     });
+    
+    // === PART 3: Assign defenders for each team ===
+    this.aiSystem.assignDefenders(this.teammates, this.enemies);
   }
   
   private getColorIndex(color: number): number {
@@ -3044,8 +3112,9 @@ export class RunScene extends Phaser.Scene {
     // Update enemies
     this.enemies.forEach((e) => e.update(delta));
     
-    // Update enemy goalkeeper (Part C)
+    // Update both goalkeepers (Part C + Part 4)
     this.enemyGoalkeeper?.update(delta);
+    this.playerGoalkeeper?.update(delta);
     
     // Update GK status marker (Part B)
     this.updateGKStatusMarker();

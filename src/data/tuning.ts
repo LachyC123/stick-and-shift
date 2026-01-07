@@ -182,8 +182,8 @@ export const AI_OBJECTIVE_WEIGHT = 0.85;
 
 /** Distance to consider "pressured" */
 export const AI_PRESSURE_RADIUS = 95;
-/** Shooting range from goal - INCREASED for more shots */
-export const AI_SHOOT_RANGE = 420;
+/** Shooting range from goal - MUST be <= D_CIRCLE_RADIUS for D-only scoring */
+export const AI_SHOOT_RANGE = 160;  // Slightly larger than D_CIRCLE_RADIUS to account for edge cases
 /** Good shooting angle threshold (cos value - higher = stricter) */
 export const AI_SHOOT_ANGLE_COS = 0.55;
 /** Good shooting angle threshold (radians from center) */
