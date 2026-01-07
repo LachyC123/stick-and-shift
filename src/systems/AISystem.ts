@@ -419,6 +419,94 @@ export class AISystem {
   // ========================================
   
   /**
+   * PART 3: Get defender-specific decision (stay back, protect D)
+   */
+  private getDefenderDecision(
+    entity: any,
+    ball: any,
+    player: any,
+    teammates: any[],
+    enemies: any[],
+    isPlayerTeam: boolean,
+    hasBall: boolean
+  ): AIDecision {
+    // Defender's own goal position
+    const ownGoalX = isPlayerTeam ? 30 : this.fieldWidth - 30;
+    const ownGoalY = this.fieldHeight / 2;
+    
+    // If has ball, play it safe - pass to teammate or clear
+    if (hasBall) {
+      const allTeammates = isPlayerTeam ? teammates : enemies.filter(e => e !== entity);
+      const safePassTarget = allTeammates.find(t => {
+        // Find teammate that's not too far forward
+        const tDistToOwnGoal = Math.abs(t.x - ownGoalX);
+        return tDistToOwnGoal > 150;  // Not in own D
+      });
+      
+      if (safePassTarget && !this.isOnPassCooldown(entity)) {
+        console.log(`[DEFENDER] Safe clearance pass`);
+        this.setPassCooldown(entity);
+        return { action: 'pass', targetEntity: safePassTarget, priority: 10 };
+      }
+      
+      // Just dribble out of danger zone
+      const clearX = isPlayerTeam ? entity.x + 80 : entity.x - 80;
+      return { action: 'move', targetX: clearX, targetY: entity.y, priority: 8 };
+    }
+    
+    // Defensive line position (20-40% from own goal)
+    const defensiveLineX = isPlayerTeam 
+      ? ownGoalX + this.fieldWidth * 0.25  // ~25% from left goal
+      : ownGoalX - this.fieldWidth * 0.25; // ~25% from right goal
+    
+    // Max forward position (defender shouldn't push too far)
+    const maxForwardX = isPlayerTeam 
+      ? this.fieldWidth * 0.55  // Don't go past midfield much
+      : this.fieldWidth * 0.45;
+    
+    // Find most dangerous attacker (ball carrier or closest to own D)
+    const attackers = isPlayerTeam ? enemies : [player, ...teammates];
+    const ownDRadius = TUNING.D_CIRCLE_RADIUS;
+    
+    let mostDangerous = ball.owner;
+    let minDistToOwnD = Infinity;
+    
+    for (const attacker of attackers) {
+      const distToOwnGoal = Phaser.Math.Distance.Between(attacker.x, attacker.y, ownGoalX, ownGoalY);
+      if (distToOwnGoal < minDistToOwnD) {
+        minDistToOwnD = distToOwnGoal;
+        mostDangerous = attacker;
+      }
+    }
+    
+    // If attacker is in own D, close down aggressively!
+    if (mostDangerous && minDistToOwnD < ownDRadius) {
+      const dist = Phaser.Math.Distance.Between(entity.x, entity.y, mostDangerous.x, mostDangerous.y);
+      console.log(`[DEFENDER] Attacker in D! Closing down aggressively`);
+      
+      if (dist < 50 && mostDangerous.hasBall) {
+        return { action: 'tackle', targetEntity: mostDangerous, priority: 15 };
+      }
+      return { action: 'move', targetX: mostDangerous.x, targetY: mostDangerous.y, priority: 14 };
+    }
+    
+    // Position: Stay goal-side of ball, between ball and own goal
+    const targetX = isPlayerTeam
+      ? Math.min(Math.max(ball.x - 60, ownGoalX + 80), maxForwardX)
+      : Math.max(Math.min(ball.x + 60, ownGoalX - 80), maxForwardX);
+    
+    // Track Y based on ball and most dangerous attacker
+    let targetY = ball.y;
+    if (mostDangerous) {
+      targetY = (ball.y + mostDangerous.y) / 2;
+    }
+    targetY = Phaser.Math.Clamp(targetY, 100, this.fieldHeight - 100);
+    
+    console.log(`[DEFENDER] Holding position at (${Math.round(targetX)}, ${Math.round(targetY)})`);
+    return { action: 'move', targetX: targetX, targetY: targetY, priority: 8 };
+  }
+  
+  /**
    * Get decision for enemy AI
    */
   getEnemyDecision(
@@ -430,6 +518,12 @@ export class AISystem {
     hasBall: boolean,
     slotIndex: number = 0
   ): AIDecision {
+    // === PART 3: Check if this entity is the assigned defender ===
+    if (this.isAssignedDefender(entity, false)) {
+      // Defender uses special positioning logic
+      return this.getDefenderDecision(entity, ball, player, teammates, enemies, false, hasBall);
+    }
+    
     // Check for defense assignment first
     const assignment = this.enemyDefenseAssignments.get(entity);
     
@@ -467,6 +561,12 @@ export class AISystem {
     hasBall: boolean,
     slotIndex: number = 0
   ): AIDecision {
+    // === PART 3: Check if this entity is the assigned defender ===
+    if (this.isAssignedDefender(entity, true)) {
+      // Defender uses special positioning logic
+      return this.getDefenderDecision(entity, ball, player, teammates, enemies, true, hasBall);
+    }
+    
     const assignment = this.teammateDefenseAssignments.get(entity);
     
     if (hasBall) {
@@ -577,6 +677,62 @@ export class AISystem {
   private lastFinishCheckTime: Map<any, number> = new Map();
   private entityStuckCounter: Map<any, number> = new Map();
   
+  // === PART 3: DEFENDER ROLE TRACKING ===
+  private playerTeamDefender: any = null;
+  private enemyTeamDefender: any = null;
+  
+  /**
+   * HELPER: Check if position is inside the attacking D circle
+   */
+  public isInsideAttackingD(x: number, y: number, isPlayerTeam: boolean): boolean {
+    const goalX = isPlayerTeam ? this.fieldWidth - 30 : 30;
+    const goalY = this.fieldHeight / 2;
+    const distToGoal = Phaser.Math.Distance.Between(x, y, goalX, goalY);
+    return distToGoal <= TUNING.D_CIRCLE_RADIUS;
+  }
+  
+  /**
+   * PART 3: Assign one defender per team
+   * Called once at match start
+   */
+  assignDefenders(teammates: any[], enemies: any[]): void {
+    // For player team: pick slowest or first available
+    if (teammates.length > 0) {
+      // Pick the one with lowest speed stat or first in array
+      this.playerTeamDefender = teammates.reduce((slowest, t) => {
+        const tSpeed = t.stats?.speed || t.speed || 100;
+        const slowestSpeed = slowest.stats?.speed || slowest.speed || 100;
+        return tSpeed < slowestSpeed ? t : slowest;
+      }, teammates[0]);
+      if (this.playerTeamDefender) {
+        this.playerTeamDefender.assignedRole = 'DEFENDER';
+        console.log(`[DEFENDER] Player team defender assigned: ${this.playerTeamDefender.id || 'teammate'}`);
+      }
+    }
+    
+    // For enemy team: pick slowest or first available  
+    if (enemies.length > 0) {
+      this.enemyTeamDefender = enemies.reduce((slowest, e) => {
+        const eSpeed = e.stats?.speed || e.speed || 100;
+        const slowestSpeed = slowest.stats?.speed || slowest.speed || 100;
+        return eSpeed < slowestSpeed ? e : slowest;
+      }, enemies[0]);
+      if (this.enemyTeamDefender) {
+        this.enemyTeamDefender.assignedRole = 'DEFENDER';
+        console.log(`[DEFENDER] Enemy team defender assigned: ${this.enemyTeamDefender.id || 'enemy'}`);
+      }
+    }
+  }
+  
+  /**
+   * Check if entity is the assigned defender for their team
+   */
+  isAssignedDefender(entity: any, isPlayerTeam: boolean): boolean {
+    return isPlayerTeam 
+      ? entity === this.playerTeamDefender 
+      : entity === this.enemyTeamDefender;
+  }
+  
   private getOffensiveDecision(
     entity: any,
     ball: any,
@@ -595,9 +751,9 @@ export class AISystem {
     const distToGoalLine = Math.abs(entity.x - goalLineX);
     const now = this.scene.time.now;
     
-    // === PART 1: AI FINISHING FIX (STATE: ATTACK_D_FINISH) ===
+    // === STRICT D-CHECK: MUST BE INSIDE D TO SHOOT ===
     const dRadius = TUNING.D_CIRCLE_RADIUS;
-    const inAttackingD = distToGoal < dRadius;
+    const inAttackingD = this.isInsideAttackingD(entity.x, entity.y, isPlayerTeam);
     
     // Track time in D with possession
     if (inAttackingD) {
@@ -688,8 +844,11 @@ export class AISystem {
     );
     const isPressured = nearbyDefenders.length > 0;
     
-    // SHOOT if in range and have angle
-    if (distToGoal < TUNING.AI_SHOOT_RANGE) {
+    // ======================================================
+    // PART 1: STRICT D-CHECK - NO SHOOT OUTSIDE D (EVER!)
+    // ======================================================
+    if (inAttackingD && distToGoal < TUNING.AI_SHOOT_RANGE) {
+      // Inside D - can consider shooting
       const blockers = defenders.filter(d => {
         const distToD = Phaser.Math.Distance.Between(entity.x, entity.y, d.x, d.y);
         return distToD < 80 && Math.abs(d.x - goalX) < Math.abs(entity.x - goalX);
@@ -701,11 +860,47 @@ export class AISystem {
         : Math.abs(Math.abs(angleToGoal) - Math.PI) < TUNING.AI_SHOOT_ANGLE_THRESHOLD;
       
       if (blockers.length <= 1 && hasGoodAngle) {
+        console.log(`[AI] Taking shot: inside D (dist=${Math.round(distToGoal)})`);
         return { action: 'shoot', targetX: goalX, targetY: goalY + (Math.random() - 0.5) * 60, priority: 10 };
       }
+    } else if (!inAttackingD) {
+      // === OUTSIDE D - CANNOT SHOOT, MUST ENTER D OR PASS ===
+      console.log(`[AI] Shot blocked: outside D (dist=${Math.round(distToGoal)}) -> switching to PASS/DRIVE`);
+      
+      // Find teammates inside D or closer to D
+      const teammateInD = teamMates.find(t => this.isInsideAttackingD(t.x, t.y, isPlayerTeam));
+      const teammateCloserToD = teamMates.find(t => {
+        const tDistToGoal = Phaser.Math.Distance.Between(t.x, t.y, goalX, goalY);
+        return tDistToGoal < distToGoal;
+      });
+      
+      // Option 1: Pass to teammate in D (best option)
+      if (teammateInD && !this.isOnPassCooldown(entity)) {
+        const laneBlocked = this.isPassLaneBlocked(entity, teammateInD, defenders);
+        if (!laneBlocked) {
+          console.log(`[AI] Passing into D to teammate`);
+          this.setPassCooldown(entity);
+          return { action: 'pass', targetEntity: teammateInD, priority: 11 };
+        }
+      }
+      
+      // Option 2: Pass to teammate closer to D
+      if (teammateCloserToD && isPressured && !this.isOnPassCooldown(entity)) {
+        const laneBlocked = this.isPassLaneBlocked(entity, teammateCloserToD, defenders);
+        if (!laneBlocked) {
+          console.log(`[AI] Passing to teammate closer to D`);
+          this.setPassCooldown(entity);
+          return { action: 'pass', targetEntity: teammateCloserToD, priority: 9 };
+        }
+      }
+      
+      // Option 3: Drive toward D entry point (ENTER_D behavior)
+      const dEntryPoint = this.getDEntryPoint(entity, goalX, goalY, isPlayerTeam);
+      console.log(`[AI] Driving toward D entry at (${Math.round(dEntryPoint.x)}, ${Math.round(dEntryPoint.y)})`);
+      return { action: 'move', targetX: dEntryPoint.x, targetY: dEntryPoint.y, priority: 8 };
     }
     
-    // PASS if pressured
+    // PASS if pressured (fallback)
     if (isPressured && !this.isOnPassCooldown(entity) && teamMates.length > 0) {
       const target = this.findBestPassTarget(entity, teamMates, defenders, isPlayerTeam);
       if (target) {
@@ -714,15 +909,28 @@ export class AISystem {
       }
     }
     
-    // DRIBBLE toward goal (avoid getting stuck on goal line)
-    const moveTarget = this.findDribbleTarget(entity, defenders, goalX, goalY);
-    // Clamp movement to not go past goal line (prevent sticking to goal line)
-    const goalLineMargin = TUNING.AI_FINISH_GOAL_LINE_DIST;
-    const clampedX = isPlayerTeam 
-      ? Math.min(moveTarget.x, this.fieldWidth - goalLineMargin - 20)
-      : Math.max(moveTarget.x, goalLineMargin + 20);
+    // DRIBBLE toward D (not goal line!)
+    const dEntryTarget = this.getDEntryPoint(entity, goalX, goalY, isPlayerTeam);
+    return { action: 'move', targetX: dEntryTarget.x, targetY: dEntryTarget.y, priority: 5 };
+  }
+  
+  /**
+   * PART 2: Get D entry point for carrier to drive into
+   */
+  private getDEntryPoint(entity: any, goalX: number, goalY: number, isPlayerTeam: boolean): { x: number; y: number } {
+    // Entry points at edges of D circle
+    const dRadius = TUNING.D_CIRCLE_RADIUS - 20;  // Slightly inside D
     
-    return { action: 'move', targetX: clampedX, targetY: moveTarget.y, priority: 5 };
+    // Decide which side to enter based on entity's Y position
+    const enterFromTop = entity.y < goalY;
+    const entryY = enterFromTop ? goalY - dRadius * 0.5 : goalY + dRadius * 0.5;
+    
+    // Entry X is at the edge of D
+    const entryX = isPlayerTeam 
+      ? this.fieldWidth - 30 - dRadius * 0.8
+      : 30 + dRadius * 0.8;
+    
+    return { x: entryX, y: entryY };
   }
   
   /**
@@ -798,10 +1006,29 @@ export class AISystem {
     teamMates: any[],
     isPlayerTeam: boolean
   ): { x: number; y: number } {
-    const goalX = isPlayerTeam ? this.fieldWidth : 0;
+    const goalX = isPlayerTeam ? this.fieldWidth - 30 : 30;
+    const goalY = this.fieldHeight / 2;
     const dirToGoal = isPlayerTeam ? 1 : -1;
     
-    const angleToGoal = Math.atan2(this.fieldHeight / 2 - carrier.y, goalX - carrier.x);
+    // === PART 2: Prioritize getting into the D as passing option ===
+    const carrierDistToGoal = Phaser.Math.Distance.Between(carrier.x, carrier.y, goalX, goalY);
+    const entityDistToGoal = Phaser.Math.Distance.Between(entity.x, entity.y, goalX, goalY);
+    const dRadius = TUNING.D_CIRCLE_RADIUS;
+    
+    // If carrier is outside D but close, support should move INTO D for a pass
+    if (carrierDistToGoal > dRadius && carrierDistToGoal < dRadius * 2.5) {
+      // Move to D entry point (near post / far post)
+      const entryY = entity.y < goalY ? goalY - dRadius * 0.4 : goalY + dRadius * 0.4;
+      const entryX = isPlayerTeam 
+        ? this.fieldWidth - 30 - dRadius * 0.6
+        : 30 + dRadius * 0.6;
+      
+      console.log(`[SUPPORT] Moving into D as pass option`);
+      return { x: entryX, y: entryY };
+    }
+    
+    // Standard triangle support
+    const angleToGoal = Math.atan2(goalY - carrier.y, goalX - carrier.x);
     const offsetAngle = entity.y < carrier.y
       ? angleToGoal - Math.PI / 4
       : angleToGoal + Math.PI / 4;
