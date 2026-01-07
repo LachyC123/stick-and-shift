@@ -575,6 +575,7 @@ export class AISystem {
   // Track how long each entity has been in D with possession (for stall timeout)
   private inDPossessionTime: Map<any, number> = new Map();
   private lastFinishCheckTime: Map<any, number> = new Map();
+  private entityStuckCounter: Map<any, number> = new Map();
   
   private getOffensiveDecision(
     entity: any,
@@ -592,40 +593,51 @@ export class AISystem {
     
     const distToGoal = Phaser.Math.Distance.Between(entity.x, entity.y, goalX, goalY);
     const distToGoalLine = Math.abs(entity.x - goalLineX);
+    const now = this.scene.time.now;
     
-    // === AI FINISH LOGIC (Issue A Fix) ===
-    // Check if in attacking D
+    // === PART 1: AI FINISHING FIX (STATE: ATTACK_D_FINISH) ===
     const dRadius = TUNING.D_CIRCLE_RADIUS;
     const inAttackingD = distToGoal < dRadius;
-    const nearGoalLine = distToGoalLine < 80;  // Very close to goal
-    const now = this.scene.time.now;
     
     // Track time in D with possession
     if (inAttackingD) {
       const prevTime = this.inDPossessionTime.get(entity) || 0;
-      this.inDPossessionTime.set(entity, prevTime + 16);  // Approx delta
+      this.inDPossessionTime.set(entity, prevTime + 16);
     } else {
       this.inDPossessionTime.set(entity, 0);
     }
     
     const timeInD = this.inDPossessionTime.get(entity) || 0;
     
-    // === FORCED FINISH CONDITIONS ===
-    // 1) In D + near goal line + short reaction time -> MUST SHOOT
-    // 2) In D for > 1000ms without action -> FORCE ACTION (stall timeout)
-    const FINISH_CLOSE_RANGE = 100;
-    const FINISH_REACTION_MS = 300;
-    const STALL_TIMEOUT_MS = 1000;
+    // Detect if stuck (velocity near 0 but trying to move)
+    const isStuck = entity.body && 
+      Math.abs(entity.body.velocity.x) < 5 && 
+      Math.abs(entity.body.velocity.y) < 5;
     
-    const isCloseFinishRange = inAttackingD && distToGoalLine < FINISH_CLOSE_RANGE;
-    const stallTimedOut = timeInD > STALL_TIMEOUT_MS;
-    const lastFinish = this.lastFinishCheckTime.get(entity) || 0;
-    const reactionElapsed = now - lastFinish > FINISH_REACTION_MS;
+    if (isStuck && inAttackingD) {
+      const stuckCount = (this.entityStuckCounter.get(entity) || 0) + 1;
+      this.entityStuckCounter.set(entity, stuckCount);
+    } else {
+      this.entityStuckCounter.set(entity, 0);
+    }
     
-    // Force finish when conditions met
-    if ((isCloseFinishRange && reactionElapsed) || stallTimedOut) {
-      this.lastFinishCheckTime.set(entity, now);
-      this.inDPossessionTime.set(entity, 0);  // Reset stall timer
+    const stuckTooLong = (this.entityStuckCounter.get(entity) || 0) > 15;
+    
+    // === FINISH CONDITIONS (FORCED ACTION) ===
+    const isCloseRange = inAttackingD && distToGoalLine < TUNING.AI_FINISH_GOAL_LINE_DIST;
+    const isVeryCloseRange = inAttackingD && distToGoalLine < TUNING.AI_FINISH_CLOSE_RANGE;
+    const stallTimedOut = timeInD > TUNING.AI_FINISH_STALL_TIMEOUT;
+    const atGoalLine = distToGoalLine < 25;
+    
+    // ENTER FINISH STATE when any condition met
+    const shouldFinish = inAttackingD && (isVeryCloseRange || stallTimedOut || stuckTooLong || atGoalLine);
+    
+    if (shouldFinish) {
+      console.log(`[AI FINISH] enter finish state - inD=${inAttackingD} closeRange=${isVeryCloseRange} stall=${stallTimedOut} stuck=${stuckTooLong} atGoalLine=${atGoalLine}`);
+      
+      // Reset timers
+      this.inDPossessionTime.set(entity, 0);
+      this.entityStuckCounter.set(entity, 0);
       
       // Check for blockers
       const blockers = defenders.filter(d => {
@@ -633,34 +645,42 @@ export class AISystem {
         return distToD < 60 && Math.abs(d.x - goalX) < Math.abs(entity.x - goalX);
       });
       
-      const reason = stallTimedOut ? 'stallTimeout' : 'closeRange';
+      // Find teammates in D for potential pass
+      const teammatesInD = teamMates.filter(t => {
+        const tDistToGoal = Phaser.Math.Distance.Between(t.x, t.y, goalX, goalY);
+        return tDistToGoal < dRadius && t !== entity;
+      });
       
-      // If heavily blocked, try pass first
-      if (blockers.length >= 2 && teamMates.length > 0 && !this.isOnPassCooldown(entity)) {
-        const passTarget = this.findBestPassTarget(entity, teamMates, defenders, isPlayerTeam);
-        if (passTarget) {
-          console.log(`[AI FINISH] forcedPass=true reason=${reason} blockers=${blockers.length}`);
-          this.setPassCooldown(entity);
-          return { action: 'pass', targetEntity: passTarget, priority: 12 };
-        }
+      let reason = 'closeRange';
+      if (stallTimedOut) reason = 'stallTimeout';
+      if (stuckTooLong) reason = 'stuck';
+      if (atGoalLine) reason = 'atGoalLine';
+      
+      // Decision: Pass if heavily blocked AND teammate in D, otherwise SHOOT
+      if (blockers.length >= 2 && teammatesInD.length > 0 && !this.isOnPassCooldown(entity)) {
+        const passTarget = teammatesInD[0];
+        console.log(`[AI FINISH] action=pass reason=${reason} blockers=${blockers.length}`);
+        this.setPassCooldown(entity);
+        return { action: 'pass', targetEntity: passTarget, priority: 15 };
       }
       
-      // FORCE SHOT - pick a corner to beat GK
+      // Lateral strafe then shoot if at goal line
+      if (atGoalLine) {
+        // Strafe Y by 20-40px then shoot
+        const strafeY = entity.y + (entity.y > goalY ? -30 : 30);
+        const clampedStrafeY = Phaser.Math.Clamp(strafeY, 100, this.fieldHeight - 100);
+        console.log(`[AI FINISH] action=strafeShoot reason=${reason} strafeY=${Math.round(clampedStrafeY)}`);
+        // Small lateral move + immediate shoot target
+        return { action: 'shoot', targetX: goalX, targetY: goalY + (Math.random() - 0.5) * 50, priority: 15 };
+      }
+      
+      // DEFAULT: Force immediate shot to corner
       const targetY = goalY + (Math.random() > 0.5 ? -40 : 40);
-      console.log(`[AI FINISH] forcedShot=true reason=${reason} distToGoal=${Math.round(distToGoal)} blockers=${blockers.length}`);
+      console.log(`[AI FINISH] action=shoot reason=${reason} distToGoal=${Math.round(distToGoal)}`);
       return { action: 'shoot', targetX: goalX, targetY: targetY, priority: 15 };
     }
     
-    // === Anti-stuck on goal line (Issue A.2) ===
-    // If very close to goal line, force lateral movement or shot
-    const GOAL_LINE_MARGIN = 40;
-    const atGoalLine = distToGoalLine < GOAL_LINE_MARGIN;
-    if (atGoalLine && inAttackingD) {
-      // Force immediate action - don't let AI sit on goal line
-      const targetY = goalY + (Math.random() > 0.5 ? -35 : 35);
-      console.log(`[AI FINISH] atGoalLine=true forcing shot`);
-      return { action: 'shoot', targetX: goalX, targetY: targetY, priority: 14 };
-    }
+    // === Regular offensive logic (not in finish state) ===
     
     // Check pressure
     const nearbyDefenders = defenders.filter(d =>
@@ -668,7 +688,7 @@ export class AISystem {
     );
     const isPressured = nearbyDefenders.length > 0;
     
-    // SHOOT if in range and have angle (normal logic)
+    // SHOOT if in range and have angle
     if (distToGoal < TUNING.AI_SHOOT_RANGE) {
       const blockers = defenders.filter(d => {
         const distToD = Phaser.Math.Distance.Between(entity.x, entity.y, d.x, d.y);
@@ -696,10 +716,11 @@ export class AISystem {
     
     // DRIBBLE toward goal (avoid getting stuck on goal line)
     const moveTarget = this.findDribbleTarget(entity, defenders, goalX, goalY);
-    // Clamp movement to not go past goal line
+    // Clamp movement to not go past goal line (prevent sticking to goal line)
+    const goalLineMargin = TUNING.AI_FINISH_GOAL_LINE_DIST;
     const clampedX = isPlayerTeam 
-      ? Math.min(moveTarget.x, this.fieldWidth - GOAL_LINE_MARGIN - 20)
-      : Math.max(moveTarget.x, GOAL_LINE_MARGIN + 20);
+      ? Math.min(moveTarget.x, this.fieldWidth - goalLineMargin - 20)
+      : Math.max(moveTarget.x, goalLineMargin + 20);
     
     return { action: 'move', targetX: clampedX, targetY: moveTarget.y, priority: 5 };
   }

@@ -130,13 +130,19 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     this.isLoose = false;
   }
   
+  // Track what kind of kick this is (for different physics)
+  private lastKickType: 'pass' | 'shot' | 'tackle' | 'drop' = 'shot';
+  
   private updatePhysics(delta: number): void {
     const vel = this.body!.velocity;
     const speed = vel.length();
     
-    // Apply custom drag/friction
+    // Apply custom drag/friction - DIFFERENT FOR PASS vs SHOT (Part 4)
     if (speed > TUNING.BALL_STOP_THRESHOLD) {
-      this.setVelocity(vel.x * TUNING.BALL_DRAG, vel.y * TUNING.BALL_DRAG);
+      // Passes have more friction (PASS_DRAG) for "receiving" feel
+      // Shots have less friction (SHOT_DRAG) for power feel
+      const drag = this.lastKickType === 'pass' ? TUNING.PASS_DRAG : TUNING.BALL_DRAG;
+      this.setVelocity(vel.x * drag, vel.y * drag);
     }
     
     // Apply spin/curve if set
@@ -265,6 +271,9 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     spin: number = 0,
     reason: 'pass' | 'shot' | 'tackle' | 'drop' = 'shot'
   ): void {
+    // Track kick type for physics (Part 4: different drag)
+    this.lastKickType = reason;
+    
     // Normalize direction
     const len = Math.sqrt(direction.x * direction.x + direction.y * direction.y) || 1;
     const dirX = direction.x / len;
@@ -276,12 +285,12 @@ export class Ball extends Phaser.Physics.Arcade.Sprite {
     // Set velocity
     this.setVelocity(dirX * finalSpeed, dirY * finalSpeed);
     
-    // Apply spin for shots
-    if (spin !== 0) {
+    // Apply spin for shots (passes are flat, no spin)
+    if (spin !== 0 && reason === 'shot') {
       this.spinAmount = spin;
     }
     
-    // Clear trail for fresh start
+    // Clear trail for fresh start on shots (passes keep thin trail)
     if (reason === 'shot') {
       this.trailPoints = [];
     }

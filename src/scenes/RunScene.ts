@@ -2312,6 +2312,11 @@ export class RunScene extends Phaser.Scene {
     
     if (!carrier) return;
     
+    // Check for recovery invulnerability (Part 2 - no chain tackles)
+    if (carrier.isInvulnerable) {
+      return;
+    }
+    
     const dist = Phaser.Math.Distance.Between(tackler.x, tackler.y, carrier.x, carrier.y);
     
     if (dist < tackleRange) {
@@ -2321,25 +2326,25 @@ export class RunScene extends Phaser.Scene {
       const tacklerIsAI = this.enemies.includes(tackler);
       
       if (Math.random() < tackleSuccess) {
-        // === SUCCESSFUL TACKLE - IMPACTFUL! ===
+        // === SUCCESSFUL TACKLE - VERY PUNISHING! (Part 2) ===
         
         // Record AI tackle success (Part A)
         if (tacklerIsAI) {
           this.aiSystem.recordTackleAttempt(true);
         }
         
-        // 1) Apply hitstop to both for micro-freeze impact feel
+        // 1) Apply hitstop to both for micro-freeze impact feel - LONGER
         if (tackler.applyHitstop) tackler.applyHitstop(TUNING.TACKLE_HITSTOP_MS);
         if (carrier.applyHitstop) carrier.applyHitstop(TUNING.TACKLE_HITSTOP_MS);
         
-        // 2) Carrier loses ball and gets stunned
+        // 2) Carrier loses ball and gets LONG stun (PUNISHING)
         carrier.loseBall();
-        carrier.applyStun(TUNING.TACKLE_STUN_MS);
+        carrier.applyStun(TUNING.TACKLE_STUN_MS);  // 450ms - can't act!
         
-        // 3) Apply knockback to carrier - push them AWAY from tackler
+        // 3) Apply STRONGER knockback to carrier - push them AWAY
         const dx = carrier.x - tackler.x;
         const dy = carrier.y - tackler.y;
-        const knockbackForce = TUNING.TACKLE_KNOCKBACK_CARRIER;
+        const knockbackForce = TUNING.TACKLE_KNOCKBACK_CARRIER;  // 580 now
         if (carrier.applyKnockback) {
           carrier.applyKnockback(dx, dy, knockbackForce);
         } else if (carrier.body) {
@@ -2348,9 +2353,10 @@ export class RunScene extends Phaser.Scene {
           carrier.body.velocity.y += (dy / len) * knockbackForce;
         }
         
-        // 4) Ball pops loose with strong impulse AWAY from tackler
-        const popDir = { x: dx, y: dy };
-        this.ball.kick(popDir, TUNING.TACKLE_BALL_POP, 0, 'tackle');
+        // 4) Ball pops loose with scatter - toward advantage position
+        const scatterAngle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.6;
+        const scatterDir = { x: Math.cos(scatterAngle), y: Math.sin(scatterAngle) };
+        this.ball.kick(scatterDir, TUNING.TACKLE_BALL_POP + TUNING.TACKLE_BALL_SCATTER, 0, 'tackle');
         this.ball.isLoose = true;
         this.ball.owner = null;
         
@@ -2359,21 +2365,22 @@ export class RunScene extends Phaser.Scene {
           (tackler.x + carrier.x) / 2,
           (tackler.y + carrier.y) / 2
         );
+        this.particleManager.sparkBurst(carrier.x, carrier.y, 0xffd700, 10);
         
-        // Additional spark burst for big hit
-        this.particleManager.sparkBurst(carrier.x, carrier.y, 0xffd700, 8);
-        
-        // 6) Camera shake - chunky!
+        // 6) Camera shake - STRONGER
         this.cameras.main.shake(TUNING.TACKLE_SHAKE_DURATION, TUNING.TACKLE_SHAKE);
         
-        // 7) Flash the carrier
+        // 7) Flash the carrier bright white
         if (carrier.setTint) {
           carrier.setTint(0xffffff);
-          this.time.delayedCall(60, () => carrier.clearTint?.());
+          this.time.delayedCall(100, () => carrier.clearTint?.());
         }
         
         // 8) Sound
         this.audioSystem.playSteal();
+        
+        // === NEW: "TACKLED!" floating text (Part 2) ===
+        this.showFloatingText(carrier.x, carrier.y, '💥 TACKLED!', '#ff4444', 22);
         
         // Determine teams
         const tacklerIsPlayerTeam = tackler === this.player || this.teammates.includes(tackler);
@@ -2394,15 +2401,27 @@ export class RunScene extends Phaser.Scene {
           this.triggerAdvantagePlay();
         }
         
-        // HEALTH SYSTEM (Part C) - Player takes damage when tackled
+        // === PUNISHING TACKLE DAMAGE (Part 2) - Health + Stamina loss ===
         if (carrier === this.player) {
-          const damage = TUNING.TACKLE_DAMAGE_BASE;
+          // Health damage
+          const damage = TUNING.TACKLE_HEALTH_DAMAGE;
           const died = this.player.takeDamage(damage, 'tackle');
           
-          console.log(`[TACKLE_DAMAGE] Player took ${damage} damage. Health: ${this.player.health}`);
+          // Stamina loss
+          if (this.player.stamina !== undefined) {
+            this.player.stamina = Math.max(0, this.player.stamina - TUNING.TACKLE_STAMINA_LOSS);
+            this.player.onStaminaChange?.(this.player.stamina, this.player.maxStamina);
+          }
+          
+          console.log(`[TACKLE_PUNISH] Player: -${damage} HP, -${TUNING.TACKLE_STAMINA_LOSS} stamina. HP: ${this.player.health}`);
+          
+          // Set recovery invulnerability (can't be chain-tackled)
+          this.player.isInvulnerable = true;
+          this.time.delayedCall(TUNING.TACKLE_RECOVERY_INVULN_MS, () => {
+            this.player.isInvulnerable = false;
+          });
           
           if (died) {
-            // Player died - moment fails immediately
             this.handlePlayerDeath('tackled');
             return;
           }
@@ -2412,8 +2431,6 @@ export class RunScene extends Phaser.Scene {
         if (tacklerIsPlayerTeam && carrierIsEnemy) {
           console.log(`[STEAL] ${tackler === this.player ? 'Player' : 'Teammate'} tackled enemy`);
           this.momentSystem.playerStole();
-          
-          // Update ball's last possessing team
           this.ball.setLastPossessingTeam('player');
         }
       } else {
